@@ -7,7 +7,8 @@
 //!
 //! Control lines on stdin:
 //!     detail 0|1|2    0 = none, 1 = top processes, 2 = every process
-//!     focus <page>    page the panel shows; "network" adds per-process traffic
+//!     focus <page>    page the panel shows; "network" adds per-process traffic,
+//!                     "gpu" per-process GPU time and video memory
 //!     interval <sec>  change the sampling interval (0.1 – 30)
 //!     pubip           refresh the public IP address in the background
 //!     quit            exit
@@ -171,6 +172,7 @@ fn main() {
     let mut battery_cache = Value::Null;
     let mut procs_cache = Value::Null;
     let mut connections_cache = Value::Null;
+    let mut gpu_procs_cache = Value::Null;
 
     loop {
         let (detail, focus, want_public, current_interval, stop) = {
@@ -219,6 +221,11 @@ fn main() {
             } else {
                 Value::Null
             };
+            gpu_procs_cache = if detail > 0 && focus == "gpu" {
+                procs.gpu_usage()
+            } else {
+                Value::Null
+            };
             last_slow = Some(tick_start);
         }
 
@@ -243,6 +250,7 @@ fn main() {
         payload["sensors"] = sensors_cache.clone();
         payload["battery"] = battery_cache.clone();
         payload["procs"] = procs_cache.clone();
+        payload["gpuProcs"] = gpu_procs_cache.clone();
 
         let line = match bounded_output_line(&payload, seq, now, elapsed, current_interval) {
             Some(l) => l,

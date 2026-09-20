@@ -39,6 +39,7 @@ GPU_TEMP_HWMON = ("amdgpu", "nouveau", "i915", "xe", "radeon")
 PROC_LIMIT = 6
 FULL_LIMIT = 400
 CONNECTION_LIMIT = 12
+GPU_PROC_LIMIT = 8
 CONTROL_LINE_LIMIT = 4 * 1024
 EXTERNAL_TEXT_LIMIT = 512
 STREAM_LINE_LIMIT = 64 * 1024
@@ -424,7 +425,8 @@ class GpuSampler:
 
     QUERY = (
         "name,utilization.gpu,memory.used,memory.total,temperature.gpu,"
-        "power.draw,clocks.gr,clocks.max.gr,fan.speed,pci.bus_id"
+        "power.draw,clocks.gr,clocks.max.gr,fan.speed,pci.bus_id,"
+        "utilization.memory,utilization.encoder,utilization.decoder,clocks.mem,power.limit"
     )
     LIMIT = 8
     RESCAN = 5.0
@@ -600,8 +602,13 @@ class GpuSampler:
                 except ValueError:
                     return None
 
+            def extra(index: int) -> float | None:
+                # Older drivers may not know the newer fields: they stay null.
+                return num(parts[index]) if index < len(parts) else None
+
             mem_used = num(parts[2])
             mem_total = num(parts[3])
+            busy = [value for value in (extra(11), extra(12)) if value is not None]
             bus_id = self._normalize_bus_id(parts[9])
             snapshot = {
                 "id": bus_id,
@@ -615,12 +622,17 @@ class GpuSampler:
                 "mhz": num(parts[6]),
                 "maxMhz": num(parts[7]),
                 "fan": num(parts[8]),
+                "memBusy": extra(10),
+                "vcnBusy": max(busy) if busy else None,
+                "memMhz": extra(13),
+                "powerCap": extra(14),
             }
             with self.lock:
                 self.latest[bus_id] = snapshot
 
     @staticmethod
-    def _hwmon_value(device: dict, prefix: str, labels: tuple[str, ...]) -> float | None:
+    def _hwmon_value(device: dict, prefix: str, labels: tuple[str, ...], exact: bool = False) -> float | None:
+        """The channel with one of `labels`, else the first one unless `exact`."""
         hwmon = device["hwmon"]
         if not hwmon:
             return None
@@ -631,7 +643,7 @@ class GpuSampler:
             for entry in entries:
                 if entry.startswith(prefix) and entry.endswith(suffix):
                     label = read_text(f"{hwmon}/{entry[:-len(suffix)]}_label").lower()
-                    if label in labels or chosen is None:
+                    if label in labels or (chosen is None and not exact):
                         chosen = entry
                         if label in labels:
                             break
@@ -645,6 +657,11 @@ class GpuSampler:
             with self.lock:
                 latest = self.latest.get(device["id"])
                 return dict(latest) if latest else {"id": device["id"], "name": device["name"], "vendor": kind, "util": None}
+        hwmon = device["hwmon"]
+
+        def scaled(value: float | None, divisor: int) -> float | None:
+            return value / divisor if value is not None else None
+
         util = read_float(f"{card}/gpu_busy_percent")
         mem_used = read_float(f"{card}/mem_info_vram_used")
         mem_total = read_float(f"{card}/mem_info_vram_total")
@@ -674,6 +691,14 @@ class GpuSampler:
             "mhz": mhz,
             "maxMhz": max_mhz,
             "fan": None,
+            "tempJunction": scaled(self._hwmon_value(device, "temp", ("junction",), True), 1000),
+            "tempMem": scaled(self._hwmon_value(device, "temp", ("mem",), True), 1000),
+            "memBusy": read_float(f"{card}/mem_busy_percent"),
+            "vcnBusy": read_float(f"{card}/vcn_busy_percent"),
+            "memMhz": scaled(self._hwmon_value(device, "freq", ("mclk",), True), 1_000_000),
+            "fanRpm": read_float(f"{hwmon}/fan1_input") if hwmon else None,
+            "fanMax": read_float(f"{hwmon}/fan1_max") if hwmon else None,
+            "powerCap": scaled(read_float(f"{hwmon}/power1_cap") if hwmon else None, 1_000_000),
         }
 
     def sample(self) -> list[dict]:
@@ -1352,6 +1377,8 @@ class ProcessSampler:
         self.names: dict[int, str] = {}
         self.sockets_prev: dict[str, tuple[int, int]] = {}
         self.sockets_time: float | None = None
+        self.gpu_prev: dict[tuple[str, str], dict[str, int]] = {}
+        self.gpu_time: float | None = None
 
     def reset(self) -> None:
         self.prev = {}
@@ -1456,6 +1483,98 @@ class ProcessSampler:
                 for g in by_cpu[:FULL_LIMIT]
             ]
         return result
+
+    def _process_name(self, pid: int) -> str:
+        name = self.names.get(pid)
+        if name is None:
+            stat = read_text(f"/proc/{pid}/stat")
+            open_paren, close = stat.find("("), stat.rfind(")")
+            name = display_name(pid, stat[open_paren + 1:close]) if 0 <= open_paren < close else f"pid {pid}"
+        return name
+
+    @staticmethod
+    def parse_drm_fdinfo(text: str) -> dict | None:
+        """The standard `drm-*` keys, shared by amdgpu, i915 and xe."""
+        units = {"KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30}
+
+        def size(value: str) -> int | None:
+            fields = value.split()
+            try:
+                return int(fields[0]) * units.get(fields[1] if len(fields) > 1 else "", 1)
+            except (ValueError, IndexError):
+                return None
+
+        pdev = client = ""
+        resident = total = None
+        engines: dict[str, int] = {}
+        for line in text.splitlines():
+            key, sep, value = line.partition(":")
+            if not sep:
+                continue
+            key, value = key.strip(), value.strip()
+            if key == "drm-pdev":
+                pdev = bounded_text(value)
+            elif key == "drm-client-id":
+                client = bounded_text(value)
+            elif key == "drm-resident-vram":
+                resident = size(value)
+            elif key in ("drm-memory-vram", "drm-total-vram"):
+                total = total if total is not None else size(value)
+            elif key.startswith("drm-engine-") and not key.startswith("drm-engine-capacity-"):
+                try:
+                    engines[key[len("drm-engine-"):]] = int(value.split()[0])
+                except (ValueError, IndexError):
+                    continue
+        if not pdev or not client:
+            return None
+        vram = resident if resident is not None else (total or 0)
+        return {"pdev": pdev, "client": client, "engines": engines, "vram": vram}
+
+    def gpu_usage(self) -> list[dict]:
+        """GPU time and video memory per process, from the DRM clients behind
+        each process's open `/dev/dri` files. Only readable processes are
+        counted, and drivers without DRM fdinfo (NVIDIA's) report nothing."""
+        clients: dict[tuple[str, str], tuple[int, dict]] = {}
+        for entry in list_dir("/proc", PROCESS_SCAN_LIMIT):
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            for fd in list_dir(f"/proc/{pid}/fd", FD_SCAN_LIMIT):
+                try:
+                    if not os.readlink(f"/proc/{pid}/fd/{fd}").startswith("/dev/dri/"):
+                        continue
+                except OSError:
+                    continue
+                client = self.parse_drm_fdinfo(read_text(f"/proc/{pid}/fdinfo/{fd}"))
+                if client:
+                    # A client shared through dup() or fork() counts once.
+                    clients.setdefault((client["pdev"], client["client"]), (pid, client))
+
+        now = time.monotonic()
+        elapsed = now - self.gpu_time if self.gpu_time is not None else 0.0
+        usable = 0.0 < elapsed < 5.0
+        usage: dict[str, dict] = {}
+        current: dict[tuple[str, str], dict[str, int]] = {}
+        for key, (pid, client) in clients.items():
+            before = self.gpu_prev.get(key)
+            # The busiest engine, as `gpu_busy_percent` reports for the whole card.
+            deltas = [max(0, ns - before[engine]) for engine, ns in client["engines"].items() if before and engine in before]
+            percent = min(100.0, max(0.0, max(deltas, default=0) / (elapsed * 1e9) * 100)) if usable else 0.0
+            row = usage.setdefault(self._process_name(pid), {"pid": pid, "gpu": 0.0, "vram": 0, "id": client["pdev"], "most": 0})
+            row["gpu"] = min(100.0, row["gpu"] + percent)
+            row["vram"] += client["vram"]
+            if client["vram"] > row["most"]:  # the GPU holding most of its video memory
+                row["most"], row["id"] = client["vram"], client["pdev"]
+            current[key] = client["engines"]
+        self.gpu_prev = current
+        self.gpu_time = now
+
+        rows = [(name, row) for name, row in usage.items() if row["gpu"] > 0 or row["vram"] > 0]
+        rows.sort(key=lambda item: (-item[1]["gpu"], -item[1]["vram"]))
+        return [
+            {"name": name, "pid": row["pid"], "gpu": round(row["gpu"], 1), "vram": row["vram"], "id": row["id"]}
+            for name, row in rows[:GPU_PROC_LIMIT]
+        ]
 
     def network_usage(self, full: bool = False) -> list[dict]:
         """Network traffic per process, without root.
@@ -1656,6 +1775,7 @@ def main() -> int:
     battery_cache: dict | None = None
     procs_cache: dict | None = None
     connections_cache: list | None = None
+    gpu_procs_cache: list | None = None
 
     while not controller.stop:
         now_mono = time.monotonic()
@@ -1702,6 +1822,12 @@ def main() -> int:
                     connections_cache = procs.network_usage(detail >= 2)
                 except Exception as error:  # noqa: BLE001
                     payload["errors"].append(f"connections: {error}")
+            gpu_procs_cache = None
+            if detail and focus == "gpu":
+                try:
+                    gpu_procs_cache = procs.gpu_usage()
+                except Exception as error:  # noqa: BLE001
+                    payload["errors"].append(f"gpu processes: {error}")
             last_slow = now_mono
         for key, fn in (
             ("cpu", cpu.sample),
@@ -1721,6 +1847,7 @@ def main() -> int:
         payload["sensors"] = sensors_cache
         payload["battery"] = battery_cache
         payload["procs"] = procs_cache
+        payload["gpuProcs"] = gpu_procs_cache
         try:
             sys.stdout.buffer.write(encode_payload(payload))
             sys.stdout.buffer.flush()
