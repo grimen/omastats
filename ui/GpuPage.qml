@@ -69,7 +69,7 @@ Column {
       waitForEnd: true
       onStreamFinished: {
         root.lactProfiles = Model.nameLines(text, 16)
-        if (root.lactProfiles.length > 1) lactGet.running = true
+        if (root.lactProfiles.length > 0) lactGet.running = true
       }
     }
     onExited: function(code) { if (code !== 0) root.lactProfiles = [] }
@@ -120,7 +120,7 @@ Column {
   }
 
   Card {
-    visible: !root.embedded && root.lactProfiles.length > 1
+    visible: !root.embedded && root.lactProfiles.length > 0
     foreground: root.foreground
 
     SectionTitle { text: "GPU profile"; fontFamily: root.fontFamily }
@@ -133,6 +133,19 @@ Column {
       foreground: root.foreground
       fontFamily: root.fontFamily
       onChanged: function(value) { root.setLactProfile(value) }
+    }
+
+    // One profile leaves nothing to switch to, which would otherwise look like a missing feature.
+    Text {
+      visible: root.lactProfiles.length === 1
+      width: parent.width
+      textFormat: Text.PlainText
+      wrapMode: Text.WordWrap
+      text: "Add profiles in LACT to switch between power modes here."
+      color: root.foreground
+      opacity: 0.55
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
     }
   }
 
