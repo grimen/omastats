@@ -151,7 +151,8 @@ WidgetButton {
         return parts.join(" · ") + "\nLoad " + Model.loadText(cpu.load) + " · Up " + Model.uptimeText(cpu.uptime)
       case "gpu":
         if (!gpu) return "GPU not detected"
-        parts.push(Model.shortGpuName(gpu.name) + " " + (gpu.asleep ? "asleep" : isFinite(Number(gpu.util)) ? Model.percentText(gpu.util) : ""))
+        parts.push(Model.gpuKindLabel(gpu, Model.gpuNumber(snap, gpu)))
+        parts.push(Model.gpuFullName(gpu) + " " + (gpu.asleep ? "asleep" : isFinite(Number(gpu.util)) ? Model.percentText(gpu.util) : ""))
         if (Model.freqText(gpu.mhz)) parts.push(Model.freqText(gpu.mhz))
         if (isFinite(Number(gpu.temp))) parts.push(Model.tempLongText(gpu.temp, temperatureUnit))
         if (gpu.memTotal > 0) parts.push(Model.pairText(gpu.memUsed, gpu.memTotal))
