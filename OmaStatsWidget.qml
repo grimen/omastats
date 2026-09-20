@@ -32,9 +32,6 @@ Panel {
     }
     return out.length > 0 ? out : ["cpu"]
   }
-  // A string, so the readouts are only rebuilt when the set of GPUs changes.
-  readonly property string gpuKeys: Model.gpuList(service ? service.snapshot : null).map(Model.gpuKey).join(",")
-  readonly property var barReadouts: Model.barReadouts(barModules, gpuSource, Model.parseList(gpuKeys))
   readonly property var moduleTabs: Model.panelTabs(hasBattery, setting("tabs", Model.SETTINGS.tabs))
   readonly property var panelTabs: moduleTabs.concat(["settings"])
   readonly property color fg: Color.popups.text
@@ -233,25 +230,24 @@ Panel {
   Grid {
     id: readouts
     anchors.centerIn: parent
-    columns: root.vertical ? 1 : root.barReadouts.length
-    rows: root.vertical ? root.barReadouts.length : 1
+    columns: root.vertical ? 1 : root.barModules.length
+    rows: root.vertical ? root.barModules.length : 1
     columnSpacing: 0
     rowSpacing: 0
 
     Repeater {
-      model: root.barReadouts
+      model: root.barModules
 
       delegate: UI.BarReadout {
         required property var modelData
         bar: root.bar
-        module: Model.readoutModule(modelData)
+        module: modelData
         service: root.service
-        mode: root.styleFor(module)
+        mode: root.styleFor(modelData)
         graphWidth: root.graphWidth
         temperatureUnit: root.temperatureUnit
         disksSource: root.disksSource
-        gpuSource: Model.readoutGpu(modelData) || root.gpuSource
-        shortLabel: Model.readoutLabel(modelData, root.service ? root.service.snapshot : null)
+        gpuSource: root.gpuSource
         barSensors: root.barSensors
         labelMode: root.barLabels
         onActivated: function(id, button) {

@@ -17,8 +17,6 @@ WidgetButton {
   // Disks: "all" or a block device name. Sensors: comma list of sensor ids.
   property string disksSource: "all"
   property string gpuSource: "auto"
-  // Overrides the module's short name, to tell several readouts of one module apart.
-  property string shortLabel: ""
   property string barSensors: "cpu"
   // "text" stacks the module's short name vertically, iStat style; "icon" uses a glyph.
   property string labelMode: "text"
@@ -37,10 +35,21 @@ WidgetButton {
   readonly property bool twoLine: module === "network" || (module === "disks" && !showRing)
   readonly property color s1: service ? service.series1 : foreground
   readonly property color s2: service ? service.series2 : foreground
+  readonly property color s3: service ? service.tertiary : foreground
   readonly property real graphHeight: Math.max(8, barSize - Style.space(11))
 
   readonly property var cpu: snap.cpu || ({})
   readonly property var gpu: Model.pickGpu(snap, gpuSource)
+  // "all": every GPU shares the readout, one colour each, and the figure is the busiest.
+  readonly property var gpus: gpuSource === "all" ? Model.gpuList(snap) : (gpu ? [gpu] : [])
+  readonly property real gpuUtil: {
+    var top = NaN
+    for (var i = 0; i < gpus.length; i++) {
+      var util = Number(gpus[i].util)
+      if (gpus[i].util !== null && isFinite(util) && !(util <= top)) top = util
+    }
+    return top
+  }
   readonly property var mem: snap.mem || ({})
   readonly property var net: snap.net || ({})
   readonly property var disks: snap.disks || ({})
@@ -61,7 +70,7 @@ WidgetButton {
   readonly property real ringValue: {
     switch (module) {
       case "cpu": return Model.num(cpu.total) / 100
-      case "gpu": return gpu && isFinite(Number(gpu.util)) ? Model.num(gpu.util) / 100 : 0
+      case "gpu": return isFinite(gpuUtil) ? gpuUtil / 100 : 0
       case "memory": return memPercent / 100
       case "battery": return battery ? Model.num(battery.percent) / 100 : 0
       case "disks": {
@@ -106,7 +115,7 @@ WidgetButton {
     if (!ready) return "…"
     switch (module) {
       case "cpu": return Model.percentText(cpu.total)
-      case "gpu": return gpu && isFinite(Number(gpu.util)) ? Model.percentText(gpu.util) : "—"
+      case "gpu": return isFinite(gpuUtil) ? Model.percentText(gpuUtil) : "—"
       case "memory": return Model.percentText(memPercent)
       case "battery": return battery ? Model.percentText(battery.percent) : "—"
       case "network": return "↑ " + Model.compactRate(net.tx)
@@ -153,6 +162,13 @@ WidgetButton {
         return parts.join(" · ") + "\nLoad " + Model.loadText(cpu.load) + " · Up " + Model.uptimeText(cpu.uptime)
       case "gpu":
         if (!gpu) return "GPU not detected"
+        if (gpus.length > 1) {
+          for (var g = 0; g < gpus.length; g++) {
+            var one = gpus[g]
+            parts.push(Model.gpuKindLabel(one) + " · " + Model.shortGpuName(one.name) + " " + (one.asleep ? "asleep" : isFinite(Number(one.util)) && one.util !== null ? Model.percentText(one.util) : "—"))
+          }
+          return parts.join("\n")
+        }
         parts.push(Model.gpuKindLabel(gpu))
         parts.push(Model.shortGpuName(gpu.name) + " " + (gpu.asleep ? "asleep" : isFinite(Number(gpu.util)) ? Model.percentText(gpu.util) : ""))
         if (Model.freqText(gpu.mhz)) parts.push(Model.freqText(gpu.mhz))
@@ -221,7 +237,7 @@ WidgetButton {
 
     StackLabel {
       visible: root.module !== "sensors" && root.labelMode === "text"
-      text: root.shortLabel || root.def.short || root.def.label
+      text: root.def.short || root.def.label
       color: root.foreground
       fontFamily: root.fontFamily
       letterSize: Style.spaceReal(10)
@@ -329,8 +345,9 @@ WidgetButton {
       ceiling: 100
       series: root.module === "cpu"
         ? [root.hist.cpuUser || [], root.hist.cpuSystem || []]
-        : [root.module === "memory" ? (root.hist.memUsed || []) : ((root.gpu && root.hist.gpus ? root.hist.gpus[Model.gpuKey(root.gpu)] : null) || [])]
-      colors: [root.s1, root.s2]
+        : root.module === "memory" ? [root.hist.memUsed || []]
+        : root.gpus.map(function(gpu) { return (root.hist.gpus ? root.hist.gpus[Model.gpuKey(gpu)] : null) || [] })
+      colors: [root.s1, root.s2, root.s3]
       baselineColor: Util.alpha(root.foreground, 0.28)
     }
   }

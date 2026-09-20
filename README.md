@@ -27,7 +27,8 @@ OmaStats is an independent project and is not affiliated with Bjango.
 
 Battery and GPU only appear when the hardware exists. With several GPUs the
 bar readout follows the one with the most memory unless a **Source** is picked
-in Settings; **Every GPU** gives each GPU its own readout. GPUs are labelled integrated,
+in Settings; **Every GPU** draws them all in the one readout, a colour each, with the
+busiest GPU's figure. GPUs are labelled integrated,
 discrete or external; external means behind a port the kernel marks removable
 (Thunderbolt/USB4), so an OCuLink or riser-attached card counts as discrete. GPUs are detected again within a few seconds of an eGPU being
 plugged in or removed, and a runtime-suspended GPU is shown as asleep rather
@@ -117,7 +118,7 @@ edited there by hand or through Setup → Plugins:
 | `graphWidth`              | `36`                                      | Width of each mini graph in the bar                       |
 | `barLabels`               | `text`                                    | `text` stacks the module's letters vertically, `icon` uses glyphs |
 | `disksSource`             | `all`                                     | Disk readout and activity graph: `all` or a device like `nvme0n1` |
-| `gpuSource`               | `auto`                                    | GPU readout: `auto` (most memory), `all` (one readout per GPU) or a PCI address like `0000:03:00.0` |
+| `gpuSource`               | `auto`                                    | GPU readout: `auto` (most memory), `all` (every GPU in one readout) or a PCI address like `0000:03:00.0` |
 | `barSensors`              | `cpu`                                     | Sensor readouts: `cpu`, `gpu`, or hwmon ids like `nct6687/fan1` |
 | `temperatureUnit`         | `Celsius`                                 | `Celsius` or `Fahrenheit`                                 |
 | `refreshSeconds`          | `1`                                       | Sampling interval: 0.1, 0.2, 0.5, 1, 2, 5 or 10           |
