@@ -3,13 +3,15 @@ use crate::util::{
     run, system_command, which, EXTERNAL_TEXT_LIMIT, STREAM_LINE_LIMIT,
 };
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::BufReader;
 use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const NVIDIA_QUERY: &str =
-    "name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,clocks.gr,clocks.max.gr,fan.speed";
+    "name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,clocks.gr,clocks.max.gr,fan.speed,pci.bus_id";
+const GPU_LIMIT: usize = 8;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -18,23 +20,37 @@ enum Kind {
     Intel,
 }
 
-pub struct GpuSampler {
-    kind: Option<Kind>,
-    card: Option<String>,
+/// `00000000:01:00.0` (nvidia-smi) and `0000:01:00.0` (sysfs) compare equal.
+fn normalize_bus_id(value: &str) -> String {
+    let lower = value.trim().to_lowercase();
+    let parts: Vec<&str> = lower.split(':').collect();
+    if parts.len() != 3 {
+        return String::new();
+    }
+    let domain = parts[0];
+    let domain = &domain[domain.len().saturating_sub(4)..];
+    format!("{domain:0>4}:{}:{}", parts[1], parts[2])
+}
+
+struct Device {
+    kind: Kind,
+    card: String,
     hwmon: Option<String>,
     name: String,
-    latest: Arc<Mutex<Option<Value>>>,
+    id: String,
+}
+
+pub struct GpuSampler {
+    devices: Vec<Device>,
+    latest: Arc<Mutex<HashMap<String, Value>>>,
     child: Option<Child>,
 }
 
 impl GpuSampler {
     pub fn new() -> Self {
         let mut sampler = Self {
-            kind: None,
-            card: None,
-            hwmon: None,
-            name: String::new(),
-            latest: Arc::new(Mutex::new(None)),
+            devices: Vec::new(),
+            latest: Arc::new(Mutex::new(HashMap::new())),
             child: None,
         };
         sampler.detect();
@@ -46,57 +62,51 @@ impl GpuSampler {
             let is_card = card.starts_with("card")
                 && card[4..].bytes().all(|b| b.is_ascii_digit())
                 && card.len() > 4;
-            if !is_card {
+            if !is_card || self.devices.len() >= GPU_LIMIT {
                 continue;
             }
             let device = format!("/sys/class/drm/{card}/device");
             let vendor = read_text(format!("{device}/vendor"))
                 .unwrap_or_default()
                 .to_lowercase();
-            match vendor.as_str() {
-                "0x1002" => {
-                    self.kind = Some(Kind::Amd);
-                    self.card = Some(device);
-                    break;
-                }
-                "0x8086" => {
-                    self.kind = Some(Kind::Intel);
-                    self.card = Some(device);
-                }
-                "0x10de" if self.kind.is_none() => {
-                    self.kind = Some(Kind::Nvidia);
-                    self.card = Some(device);
-                }
-                _ => {}
-            }
+            let kind = match vendor.as_str() {
+                "0x1002" => Kind::Amd,
+                "0x8086" => Kind::Intel,
+                "0x10de" => Kind::Nvidia,
+                _ => continue,
+            };
+            let id = Self::pci_slot(&device);
+            let hwmon = list_dir(format!("{device}/hwmon"))
+                .into_iter()
+                .next()
+                .map(|hw| format!("{device}/hwmon/{hw}"));
+            let name = bounded_text(&Self::pci_name(&id), EXTERNAL_TEXT_LIMIT);
+            self.devices.push(Device {
+                kind,
+                card: device,
+                hwmon,
+                name,
+                id,
+            });
         }
-        if self.kind == Some(Kind::Nvidia) {
-            if which("nvidia-smi") {
-                self.start_nvidia();
-            } else {
-                self.kind = None;
-            }
-        }
-        if let Some(card) = self.card.clone() {
-            if let Some(hw) = list_dir(format!("{card}/hwmon")).into_iter().next() {
-                self.hwmon = Some(format!("{card}/hwmon/{hw}"));
-            }
-            self.name = bounded_text(&Self::pci_name(&card), EXTERNAL_TEXT_LIMIT);
+        let nvidia = self.devices.iter().any(|d| d.kind == Kind::Nvidia);
+        if nvidia && !(which("nvidia-smi") && self.start_nvidia()) {
+            self.devices.retain(|d| d.kind != Kind::Nvidia);
         }
     }
 
-    fn pci_name(device: &str) -> String {
-        let slot = match std::fs::canonicalize(device) {
-            Ok(p) => p
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default(),
-            Err(_) => return String::new(),
-        };
-        if !which("lspci") {
+    fn pci_slot(device: &str) -> String {
+        std::fs::canonicalize(device)
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_default()
+    }
+
+    fn pci_name(slot: &str) -> String {
+        if slot.is_empty() || !which("lspci") {
             return String::new();
         }
-        let out = run("lspci", &["-mm", "-s", &slot], Duration::from_secs(2));
+        let out = run("lspci", &["-mm", "-s", slot], Duration::from_secs(2));
         for line in out.lines() {
             let fields: Vec<&str> = line.split('"').filter(|s| !s.trim().is_empty()).collect();
             // lspci -mm quotes: slot "class" "vendor" "device" ...
@@ -120,13 +130,10 @@ impl GpuSampler {
         String::new()
     }
 
-    fn start_nvidia(&mut self) {
+    fn start_nvidia(&mut self) -> bool {
         let mut command = match system_command("nvidia-smi") {
             Some(command) => command,
-            None => {
-                self.kind = None;
-                return;
-            }
+            None => return false,
         };
         let child = command
             .arg(format!("--query-gpu={NVIDIA_QUERY}"))
@@ -139,18 +146,14 @@ impl GpuSampler {
             .spawn();
         let mut child = match child {
             Ok(c) => c,
-            Err(_) => {
-                self.kind = None;
-                return;
-            }
+            Err(_) => return false,
         };
         let stdout = match child.stdout.take() {
             Some(s) => s,
             None => {
                 kill_process_group(child.id());
                 let _ = child.wait();
-                self.kind = None;
-                return;
+                return false;
             }
         };
         let latest = Arc::clone(&self.latest);
@@ -161,13 +164,15 @@ impl GpuSampler {
                     continue;
                 }
                 let parts: Vec<&str> = line.split(',').map(|p| p.trim()).collect();
-                if parts.len() < 9 {
+                if parts.len() < 10 {
                     continue;
                 }
                 let num = |s: &str| s.parse::<f64>().ok();
                 let mem_used = num(parts[2]).map(|v| v * 1024.0 * 1024.0);
                 let mem_total = num(parts[3]).map(|v| v * 1024.0 * 1024.0);
+                let id = normalize_bus_id(parts[9]);
                 let snapshot = json!({
+                    "id": id,
                     "name": bounded_text(parts[0], EXTERNAL_TEXT_LIMIT),
                     "vendor": "nvidia",
                     "util": opt_f64(num(parts[1])),
@@ -180,15 +185,16 @@ impl GpuSampler {
                     "fan": opt_f64(num(parts[8])),
                 });
                 if let Ok(mut slot) = latest.lock() {
-                    *slot = Some(snapshot);
+                    slot.insert(id, snapshot);
                 }
             }
         });
         self.child = Some(child);
+        true
     }
 
-    fn hwmon_value(&self, prefix: &str, labels: &[&str]) -> Option<f64> {
-        let hwmon = self.hwmon.as_ref()?;
+    fn hwmon_value(device: &Device, prefix: &str, labels: &[&str]) -> Option<f64> {
+        let hwmon = device.hwmon.as_ref()?;
         let mut chosen: Option<String> = None;
         for entry in list_dir(hwmon) {
             if entry.starts_with(prefix) && entry.ends_with("_input") {
@@ -208,60 +214,59 @@ impl GpuSampler {
         read_f64(format!("{hwmon}/{}", chosen?))
     }
 
-    pub fn sample(&self) -> Value {
-        match self.kind {
-            Some(Kind::Nvidia) => {
-                if let Ok(slot) = self.latest.lock() {
-                    if let Some(v) = slot.as_ref() {
-                        return v.clone();
-                    }
+    fn sample_device(&self, device: &Device) -> Value {
+        if device.kind == Kind::Nvidia {
+            if let Ok(slot) = self.latest.lock() {
+                if let Some(v) = slot.get(&device.id) {
+                    return v.clone();
                 }
-                json!({
-                    "name": if self.name.is_empty() { "NVIDIA" } else { self.name.as_str() },
-                    "vendor": "nvidia",
-                    "util": Value::Null,
-                })
             }
-            Some(kind) => {
-                let card = match &self.card {
-                    Some(c) => c.clone(),
-                    None => return Value::Null,
-                };
-                let parent = std::path::Path::new(&card)
-                    .parent()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let util = read_f64(format!("{card}/gpu_busy_percent"));
-                let mem_used = read_f64(format!("{card}/mem_info_vram_used"));
-                let mem_total = read_f64(format!("{card}/mem_info_vram_total"));
-                let temp = self
-                    .hwmon_value("temp", &["edge", "junction"])
-                    .map(|t| t / 1000.0);
-                let power = self
-                    .hwmon_value("power", &["ppt", "power"])
-                    .map(|p| p / 1_000_000.0);
-                let mhz = self
-                    .hwmon_value("freq", &["sclk"])
-                    .map(|f| f / 1_000_000.0)
-                    .or_else(|| read_f64(format!("{parent}/gt_cur_freq_mhz")))
-                    .or_else(|| read_f64(format!("{parent}/gt/gt0/rps_cur_freq_mhz")));
-                let max_mhz = read_f64(format!("{parent}/gt_max_freq_mhz"));
-                let fallback = if kind == Kind::Amd { "AMD" } else { "Intel" };
-                json!({
-                    "name": if self.name.is_empty() { fallback } else { self.name.as_str() },
-                    "vendor": if kind == Kind::Amd { "amd" } else { "intel" },
-                    "util": opt_f64(util),
-                    "memUsed": opt_f64(mem_used),
-                    "memTotal": opt_f64(mem_total),
-                    "temp": opt_f64(temp),
-                    "power": opt_f64(power),
-                    "mhz": opt_f64(mhz),
-                    "maxMhz": opt_f64(max_mhz),
-                    "fan": Value::Null,
-                })
-            }
-            None => Value::Null,
+            return json!({
+                "id": device.id,
+                "name": if device.name.is_empty() { "NVIDIA" } else { device.name.as_str() },
+                "vendor": "nvidia",
+                "util": Value::Null,
+            });
         }
+        let card = &device.card;
+        let parent = std::path::Path::new(card)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let util = read_f64(format!("{card}/gpu_busy_percent"));
+        let mem_used = read_f64(format!("{card}/mem_info_vram_used"));
+        let mem_total = read_f64(format!("{card}/mem_info_vram_total"));
+        let temp = Self::hwmon_value(device, "temp", &["edge", "junction"]).map(|t| t / 1000.0);
+        let power =
+            Self::hwmon_value(device, "power", &["ppt", "power"]).map(|p| p / 1_000_000.0);
+        let mhz = Self::hwmon_value(device, "freq", &["sclk"])
+            .map(|f| f / 1_000_000.0)
+            .or_else(|| read_f64(format!("{parent}/gt_cur_freq_mhz")))
+            .or_else(|| read_f64(format!("{parent}/gt/gt0/rps_cur_freq_mhz")));
+        let max_mhz = read_f64(format!("{parent}/gt_max_freq_mhz"));
+        let amd = device.kind == Kind::Amd;
+        let fallback = if amd { "AMD" } else { "Intel" };
+        json!({
+            "id": device.id,
+            "name": if device.name.is_empty() { fallback } else { device.name.as_str() },
+            "vendor": if amd { "amd" } else { "intel" },
+            "util": opt_f64(util),
+            "memUsed": opt_f64(mem_used),
+            "memTotal": opt_f64(mem_total),
+            "temp": opt_f64(temp),
+            "power": opt_f64(power),
+            "mhz": opt_f64(mhz),
+            "maxMhz": opt_f64(max_mhz),
+            "fan": Value::Null,
+        })
+    }
+
+    /// Every GPU, the one with the most memory first: that one is the default readout.
+    pub fn sample(&self) -> Vec<Value> {
+        let mut gpus: Vec<Value> = self.devices.iter().map(|d| self.sample_device(d)).collect();
+        let mem = |v: &Value| v["memTotal"].as_f64().unwrap_or(0.0);
+        gpus.sort_by(|a, b| mem(b).total_cmp(&mem(a)));
+        gpus
     }
 
     pub fn stop(&mut self) {
@@ -269,5 +274,17 @@ impl GpuSampler {
             kill_process_group(child.id());
             let _ = child.wait();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_bus_id;
+
+    #[test]
+    fn bus_ids_normalize_to_the_sysfs_form() {
+        assert_eq!(normalize_bus_id("00000000:01:00.0"), "0000:01:00.0");
+        assert_eq!(normalize_bus_id(" 0000:C8:00.0 "), "0000:c8:00.0");
+        assert_eq!(normalize_bus_id("garbage"), "");
     }
 }

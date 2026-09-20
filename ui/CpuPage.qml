@@ -22,7 +22,6 @@ Column {
   readonly property color s3: service ? service.tertiary : Color.accent
 
   readonly property var cpu: snap.cpu || ({})
-  readonly property var gpu: snap.gpu || null
   readonly property var procs: snap.procs || null
   readonly property var cores: Array.isArray(cpu.cores) ? cpu.cores : []
   readonly property var efficiency: Array.isArray(cpu.efficiency) ? cpu.efficiency : []
@@ -160,52 +159,60 @@ Column {
     }
   }
 
-  Card {
-    visible: !!root.gpu && root.flag("showGpu")
-    foreground: root.foreground
+  Repeater {
+    // One card per GPU; a count model keeps the cards alive between samples.
+    model: Model.gpuList(root.snap).length
 
-    CardHeader {
-      title: "GPU"
-      detail: root.gpu ? root.headerDetail(root.gpu.mhz, root.gpu.temp) : ""
+    Card {
+      id: gpuCard
+      required property int index
+      readonly property var gpu: Model.gpuList(root.snap)[index] || null
+      visible: root.flag("showGpu")
       foreground: root.foreground
-      fontFamily: root.fontFamily
-    }
 
-    HistoryGraph {
-      width: parent.width
-      height: Style.space(48)
-      series: [root.hist.gpu || []]
-      colors: [root.s1]
-      ceiling: 100
-      baselineColor: Util.alpha(root.foreground, 0.14)
-    }
+      CardHeader {
+        title: "GPU"
+        detail: gpuCard.gpu ? root.headerDetail(gpuCard.gpu.mhz, gpuCard.gpu.temp) : ""
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+      }
 
-    StatRow {
-      label: root.gpu ? Model.shortGpuName(root.gpu.name) : "Processor"
-      dot: root.s1
-      value: root.gpu && isFinite(Number(root.gpu.util)) ? String(Math.round(root.gpu.util)) : "—"
-      unit: root.gpu && isFinite(Number(root.gpu.util)) ? "%" : ""
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-    }
+      HistoryGraph {
+        width: parent.width
+        height: Style.space(48)
+        series: [(root.hist.gpus ? root.hist.gpus[Model.gpuKey(gpuCard.gpu)] : null) || []]
+        colors: [root.s1]
+        ceiling: 100
+        baselineColor: Util.alpha(root.foreground, 0.14)
+      }
 
-    StatRow {
-      visible: !!(root.gpu && root.gpu.memTotal > 0)
-      label: "Memory"
-      detail: root.gpu && root.gpu.memTotal > 0 ? Model.percentText(root.gpu.memUsed / root.gpu.memTotal * 100) : ""
-      value: root.gpu ? Model.pairText(root.gpu.memUsed, root.gpu.memTotal).replace(/ [A-Z]+$/, "") : ""
-      unit: root.gpu ? Model.bytesParts(root.gpu.memTotal).unit : ""
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-    }
+      StatRow {
+        label: gpuCard.gpu ? Model.shortGpuName(gpuCard.gpu.name) : "Processor"
+        dot: root.s1
+        value: gpuCard.gpu && isFinite(Number(gpuCard.gpu.util)) ? String(Math.round(gpuCard.gpu.util)) : "—"
+        unit: gpuCard.gpu && isFinite(Number(gpuCard.gpu.util)) ? "%" : ""
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+      }
 
-    StatRow {
-      visible: !!(root.gpu && isFinite(Number(root.gpu.power)) && root.gpu.power !== null)
-      label: "Power"
-      value: root.gpu && root.gpu.power !== null ? String(Math.round(root.gpu.power)) : ""
-      unit: "W"
-      foreground: root.foreground
-      fontFamily: root.fontFamily
+      StatRow {
+        visible: !!(gpuCard.gpu && gpuCard.gpu.memTotal > 0)
+        label: "Memory"
+        detail: gpuCard.gpu && gpuCard.gpu.memTotal > 0 ? Model.percentText(gpuCard.gpu.memUsed / gpuCard.gpu.memTotal * 100) : ""
+        value: gpuCard.gpu ? Model.pairText(gpuCard.gpu.memUsed, gpuCard.gpu.memTotal).replace(/ [A-Z]+$/, "") : ""
+        unit: gpuCard.gpu ? Model.bytesParts(gpuCard.gpu.memTotal).unit : ""
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+      }
+
+      StatRow {
+        visible: !!(gpuCard.gpu && isFinite(Number(gpuCard.gpu.power)) && gpuCard.gpu.power !== null)
+        label: "Power"
+        value: gpuCard.gpu && gpuCard.gpu.power !== null ? String(Math.round(gpuCard.gpu.power)) : ""
+        unit: "W"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+      }
     }
   }
 
