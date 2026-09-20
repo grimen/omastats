@@ -158,6 +158,8 @@ Several instances are allowed, so modules can be spread across the bar:
 - In the panel: `h`/`l` or `←`/`→` switch tabs, `1`–`7` jump to a tab, `s` opens
   Settings, `/` searches processes, `j`/`k` scroll, `Tab` moves to the neighbouring
   bar panel, `Esc` closes, `r` refreshes.
+- Click a process in any list to **End** or **Force quit** it; each asks for a
+  second click. Only rows made up entirely of your own processes can be clicked.
 - Addresses on the Network page copy to the clipboard when clicked. Volumes on
   the Disks page open in the file manager.
 

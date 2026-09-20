@@ -40,6 +40,7 @@ PROC_LIMIT = 6
 FULL_LIMIT = 400
 CONNECTION_LIMIT = 12
 GPU_PROC_LIMIT = 8
+END_PID_LIMIT = 32  # a group is only offered for ending when every one of its pids fits
 CONTROL_LINE_LIMIT = 4 * 1024
 EXTERNAL_TEXT_LIMIT = 512
 STREAM_LINE_LIMIT = 64 * 1024
@@ -1438,7 +1439,13 @@ class ProcessSampler:
             names[pid] = name
             agg = by_name.get(name)
             if agg is None:
-                agg = by_name[name] = {"name": name, "pid": pid, "cpu": 0.0, "mem": 0, "read": 0.0, "write": 0.0, "count": 0}
+                agg = by_name[name] = {"name": name, "pid": pid, "cpu": 0.0, "mem": 0, "read": 0.0, "write": 0.0, "count": 0, "pids": [], "own": True}
+            try:
+                agg["own"] = agg["own"] and os.stat(f"/proc/{pid}").st_uid == self.uid
+            except OSError:
+                agg["own"] = False
+            if len(agg["pids"]) < END_PID_LIMIT:
+                agg["pids"].append(pid)
             agg["cpu"] += max(0.0, cpu)
             agg["mem"] += rss
             agg["read"] += io_read
@@ -1448,6 +1455,11 @@ class ProcessSampler:
         self.names = names
         groups = list(by_name.values())
 
+        def endable(g: dict) -> list[int]:
+            """The pids the UI may signal: all of the group's, and only when they
+            are all the user's own and few enough to list in full."""
+            return g["pids"] if g["own"] and g["count"] == len(g["pids"]) else []
+
         def trim(items: list[dict], key: str) -> list[dict]:
             out = []
             for item in items[:PROC_LIMIT]:
@@ -1456,7 +1468,7 @@ class ProcessSampler:
                 out.append({
                     "name": item["name"], "pid": item["pid"], "count": item["count"],
                     "cpu": round(item["cpu"], 1), "mem": item["mem"],
-                    "read": item["read"], "write": item["write"],
+                    "read": item["read"], "write": item["write"], "pids": endable(item),
                 })
             return out
 
@@ -1469,6 +1481,7 @@ class ProcessSampler:
                 {
                     "name": g["name"], "pid": g["pid"], "count": g["count"],
                     "read": g["read"], "write": g["write"], "cpu": round(g["cpu"], 1), "mem": g["mem"],
+                    "pids": endable(g),
                 }
                 for g in sorted(groups, key=lambda g: g["read"] + g["write"], reverse=True)[:PROC_LIMIT]
                 if g["read"] + g["write"] > 0
@@ -1479,6 +1492,7 @@ class ProcessSampler:
                 {
                     "name": g["name"], "pid": g["pid"], "count": g["count"],
                     "cpu": round(g["cpu"], 1), "mem": g["mem"], "read": g["read"], "write": g["write"],
+                    "pids": endable(g),
                 }
                 for g in by_cpu[:FULL_LIMIT]
             ]
