@@ -31,13 +31,6 @@ Column {
     return !!gpu && gpu[key] !== null && gpu[key] !== undefined && isFinite(Number(gpu[key]))
   }
 
-  function tempColor(celsius, max) {
-    var frac = Model.num(celsius) / max
-    if (frac >= 0.92) return danger
-    if (frac >= 0.78) return warn
-    return s1
-  }
-
   width: parent ? parent.width : implicitWidth
   spacing: Style.space(10)
 
@@ -52,6 +45,7 @@ Column {
       readonly property real memPercent: gpu && gpu.memTotal > 0 ? gpu.memUsed / gpu.memTotal * 100 : 0
       // The hotspot is what the card throttles on; the edge sensor reads cooler.
       readonly property string tempKey: root.has(gpu, "tempJunction") ? "tempJunction" : "temp"
+      readonly property bool powerLimited: root.has(gpu, "power") && root.has(gpu, "powerCap") && gpu.powerCap > 0
       foreground: root.foreground
 
       CardHeader {
@@ -102,15 +96,16 @@ Column {
           }
 
           RingGauge {
-            visible: root.has(gpuCard.gpu, gpuCard.tempKey)
-            value: visible ? Math.max(0, Math.min(1, gpuCard.gpu[gpuCard.tempKey] / 110)) : 0
-            color: visible ? root.tempColor(gpuCard.gpu[gpuCard.tempKey], 110) : root.s1
+            // Only with a known limit is power a fraction; otherwise it is a row below.
+            visible: gpuCard.powerLimited
+            value: visible ? Math.max(0, Math.min(1, gpuCard.gpu.power / gpuCard.gpu.powerCap)) : 0
+            color: visible && value >= 0.92 ? root.danger : visible && value >= 0.78 ? root.warn : root.s1
             foreground: root.foreground
             fontFamily: root.fontFamily
-            topText: "Temp"
-            valueText: visible ? Model.tempParts(gpuCard.gpu[gpuCard.tempKey], root.temperatureUnit).value : ""
-            unitText: "°"
-            subText: gpuCard.tempKey === "tempJunction" ? "hotspot" : ""
+            topText: "Power"
+            valueText: visible ? String(Math.round(gpuCard.gpu.power)) : ""
+            unitText: "W"
+            subText: visible ? "of " + Math.round(gpuCard.gpu.powerCap) + " W" : ""
             valueSize: Style.font.heading
             size: Style.space(84)
           }
@@ -155,11 +150,20 @@ Column {
       }
 
       StatRow {
-        visible: root.has(gpuCard.gpu, "power")
+        visible: root.has(gpuCard.gpu, "power") && !gpuCard.powerLimited
         label: "Power"
-        detail: root.has(gpuCard.gpu, "powerCap") ? "of " + Math.round(gpuCard.gpu.powerCap) + " W" : ""
         value: visible ? String(Math.round(gpuCard.gpu.power)) : ""
         unit: "W"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+      }
+
+      StatRow {
+        visible: root.has(gpuCard.gpu, gpuCard.tempKey)
+        label: "Temperature"
+        detail: gpuCard.tempKey === "tempJunction" ? "hotspot" : ""
+        value: visible ? Model.tempParts(gpuCard.gpu[gpuCard.tempKey], root.temperatureUnit).value : ""
+        unit: "°"
         foreground: root.foreground
         fontFamily: root.fontFamily
       }
