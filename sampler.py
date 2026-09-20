@@ -458,6 +458,27 @@ class GpuSampler:
         return out
 
     @staticmethod
+    def _is_integrated(kind: str, slot: str, has_mem_busy: bool) -> bool:
+        """amdgpu hides `mem_busy_percent` on APUs, Intel's integrated GPU sits
+        at 00:02.0, and everything else is a card of its own."""
+        if kind == "amd":
+            return not has_mem_busy
+        return kind == "intel" and slot == "0000:00:02.0"
+
+    @staticmethod
+    def _removable(device: str) -> bool:
+        """True when the card or a bridge above it is marked removable (eGPU)."""
+        try:
+            path = os.path.realpath(device)
+        except OSError:
+            return False
+        while path.startswith("/sys/devices/") and path.count("/") > 3:
+            if read_text(f"{path}/removable") == "removable":
+                return True
+            path = os.path.dirname(path)
+        return False
+
+    @staticmethod
     def _power_state(runtime_status: str) -> str:
         return "asleep" if runtime_status == "suspended" else "active"
 
@@ -497,6 +518,8 @@ class GpuSampler:
                 break
             mem_total = next((d["memTotal"] for d in previous if d["id"] == slot), None)
             self.devices.append({
+                "integrated": self._is_integrated(kind, slot, os.path.exists(f"{device}/mem_busy_percent")),
+                "external": self._removable(device),
                 "kind": kind, "card": device, "hwmon": hwmon, "id": slot, "memTotal": mem_total,
                 "name": (self._amd_marketing_name(device) if kind == "amd" else "") or self._pci_name(slot) or self.FALLBACK_NAMES[kind],
             })
@@ -661,7 +684,8 @@ class GpuSampler:
             state = self._state(device)
             if state == "gone":
                 self.last_scan = None
-            elif state == "asleep":
+                continue
+            if state == "asleep":
                 gpus.append({
                     "id": device["id"], "name": device["name"], "vendor": device["kind"],
                     "util": None, "memTotal": device["memTotal"], "asleep": True,
@@ -671,6 +695,8 @@ class GpuSampler:
                 if gpu.get("memTotal") is not None:
                     device["memTotal"] = gpu["memTotal"]
                 gpus.append(gpu)
+            gpus[-1]["kind"] = "integrated" if device["integrated"] else "discrete"
+            gpus[-1]["external"] = device["external"]
         gpus.sort(key=lambda g: -(g.get("memTotal") or 0))
         return gpus
 

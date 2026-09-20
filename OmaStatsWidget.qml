@@ -251,7 +251,7 @@ Panel {
         temperatureUnit: root.temperatureUnit
         disksSource: root.disksSource
         gpuSource: Model.readoutGpu(modelData) || root.gpuSource
-        shortLabel: Model.readoutLabel(modelData, root.gpuKeys)
+        shortLabel: Model.readoutLabel(modelData, root.service ? root.service.snapshot : null)
         barSensors: root.barSensors
         labelMode: root.barLabels
         onActivated: function(id, button) {

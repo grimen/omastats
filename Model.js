@@ -209,16 +209,34 @@ function readoutGpu(readout) {
   return at === -1 ? "" : text.slice(at + 1)
 }
 
-// "GP1", "GP2"… for per-GPU readouts, numbered like the GPU list; "" otherwise.
-function readoutLabel(readout, gpuKeys) {
-  var at = parseList(gpuKeys).indexOf(readoutGpu(readout))
-  return at === -1 ? "" : "GP" + (at + 1)
+// "Integrated GPU", "Discrete GPU" or "External GPU" (Thunderbolt/USB4).
+function gpuKindLabel(gpu) {
+  if (!gpu || !gpu.kind) return "GPU"
+  if (gpu.external) return "External GPU"
+  return gpu.kind === "integrated" ? "Integrated GPU" : "Discrete GPU"
+}
+
+// Per-GPU readouts are told apart as "IGP", "DGP" and "EGP", or numbered
+// "GP1", "GP2"… when two GPUs are of one kind; "" for any other readout.
+function readoutLabel(readout, snapshot) {
+  var key = readoutGpu(readout)
+  if (!key) return ""
+  var gpus = gpuList(snapshot)
+  var labels = []
+  var at = -1
+  for (var i = 0; i < gpus.length; i++) {
+    if (gpuKey(gpus[i]) === key) at = i
+    labels.push(gpuKindLabel(gpus[i]).charAt(0) + "GP")
+  }
+  if (at === -1) return ""
+  var unique = gpus[at].kind && labels.indexOf(labels[at]) === labels.lastIndexOf(labels[at])
+  return unique ? labels[at] : "GP" + (at + 1)
 }
 
 function gpuOptions(snapshot) {
   var gpus = gpuList(snapshot)
   var out = [{ value: "auto", label: "Auto" }, { value: "all", label: "Every GPU" }]
-  for (var i = 0; i < gpus.length; i++) out.push({ value: gpuKey(gpus[i]), label: shortGpuName(gpus[i].name).slice(0, 28) })
+  for (var i = 0; i < gpus.length; i++) out.push({ value: gpuKey(gpus[i]), label: shortGpuName(gpus[i].name).slice(0, 28) + (gpus[i].kind ? " · " + gpuKindLabel(gpus[i]).replace(" GPU", "") : "") })
   return out
 }
 
