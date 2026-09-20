@@ -61,6 +61,7 @@ Column {
   spacing: Style.space(10)
 
   Card {
+    visible: root.present
     foreground: root.foreground
 
     Item {
@@ -99,7 +100,7 @@ Column {
   }
 
   Card {
-    visible: root.flag("showHistory")
+    visible: root.present && root.flag("showHistory")
     foreground: root.foreground
 
     CardHeader {
@@ -129,7 +130,7 @@ Column {
   }
 
   Card {
-    visible: root.flag("showDetails")
+    visible: root.present && root.flag("showDetails")
     foreground: root.foreground
     spacing: Style.space(2)
 
@@ -222,7 +223,7 @@ Column {
         trailing: Component {
           MiniRing {
             value: Model.num(modelData.percent) / 100
-            color: Model.num(modelData.percent) <= 20 ? root.warn : root.s1
+            color: Model.num(modelData.percent) <= 10 ? root.danger : Model.num(modelData.percent) <= 20 ? root.warn : root.s1
             foreground: root.foreground
             size: Style.space(14)
             thickness: Style.spaceReal(2.2)

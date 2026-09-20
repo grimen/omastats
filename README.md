@@ -25,7 +25,8 @@ OmaStats is an independent project and is not affiliated with Bjango.
 | Sensors | any temperatures and fans you pick  | CPU/GPU/fan rings, every hwmon temperature and fan                    |
 | Battery | glyph by level · %                  | Charge and health rings, charge history, power, cycles, peripherals   |
 
-Battery and GPU only appear when the hardware exists.
+Battery and GPU only appear when the hardware exists; on a desktop the Battery
+tab still appears for the batteries of connected devices such as mice and keyboards.
 
 ## Install
 
