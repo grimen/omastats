@@ -27,7 +27,9 @@ OmaStats is an independent project and is not affiliated with Bjango.
 
 Battery and GPU only appear when the hardware exists. With several GPUs the
 bar readout follows the one with the most memory unless a **Source** is picked
-in Settings.
+in Settings. GPUs are detected again within a few seconds of an eGPU being
+plugged in or removed, and a runtime-suspended GPU is shown as asleep rather
+than polled, so monitoring never wakes it.
 
 ## Install
 
