@@ -50,9 +50,7 @@ Column {
 
       CardHeader {
         title: Model.gpuKindLabel(gpuCard.gpu)
-        detail: !gpuCard.gpu ? "" : gpuCard.gpu.asleep
-          ? Model.shortGpuName(gpuCard.gpu.name) + ", asleep"
-          : [Model.shortGpuName(gpuCard.gpu.name), Model.pcieText(gpuCard.gpu)].filter(function(part) { return part }).join(", ")
+        detail: !gpuCard.gpu ? "" : Model.shortGpuName(gpuCard.gpu.name) + (gpuCard.gpu.asleep ? ", asleep" : "")
         foreground: root.foreground
         fontFamily: root.fontFamily
       }
