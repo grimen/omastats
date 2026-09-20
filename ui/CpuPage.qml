@@ -159,61 +159,15 @@ Column {
     }
   }
 
-  Repeater {
-    // One card per GPU; a count model keeps the cards alive between samples.
-    model: Model.gpuList(root.snap).length
-
-    Card {
-      id: gpuCard
-      required property int index
-      readonly property var gpu: Model.gpuList(root.snap)[index] || null
-      visible: root.flag("showGpu")
-      foreground: root.foreground
-
-      CardHeader {
-        title: Model.gpuKindLabel(gpuCard.gpu, Model.gpuNumber(root.snap, gpuCard.gpu))
-        detail: !gpuCard.gpu ? "" : gpuCard.gpu.asleep ? "Asleep" : root.headerDetail(gpuCard.gpu.mhz, gpuCard.gpu.temp)
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-      }
-
-      HistoryGraph {
-        width: parent.width
-        height: Style.space(48)
-        series: [(root.hist.gpus ? root.hist.gpus[Model.gpuKey(gpuCard.gpu)] : null) || []]
-        colors: [root.s1]
-        ceiling: 100
-        baselineColor: Util.alpha(root.foreground, 0.14)
-      }
-
-      StatRow {
-        label: gpuCard.gpu ? Model.gpuFullName(gpuCard.gpu) : "Processor"
-        dot: root.s1
-        value: gpuCard.gpu && isFinite(Number(gpuCard.gpu.util)) ? String(Math.round(gpuCard.gpu.util)) : "—"
-        unit: gpuCard.gpu && isFinite(Number(gpuCard.gpu.util)) ? "%" : ""
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-      }
-
-      StatRow {
-        visible: !!(gpuCard.gpu && gpuCard.gpu.memTotal > 0)
-        label: "Memory"
-        detail: gpuCard.gpu && gpuCard.gpu.memTotal > 0 ? Model.percentText(gpuCard.gpu.memUsed / gpuCard.gpu.memTotal * 100) : ""
-        value: gpuCard.gpu ? Model.pairText(gpuCard.gpu.memUsed, gpuCard.gpu.memTotal).replace(/ [A-Z]+$/, "") : ""
-        unit: gpuCard.gpu ? Model.bytesParts(gpuCard.gpu.memTotal).unit : ""
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-      }
-
-      StatRow {
-        visible: !!(gpuCard.gpu && isFinite(Number(gpuCard.gpu.power)) && gpuCard.gpu.power !== null)
-        label: "Power"
-        value: gpuCard.gpu && gpuCard.gpu.power !== null ? String(Math.round(gpuCard.gpu.power)) : ""
-        unit: "W"
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-      }
-    }
+  // The GPU cards live here only while the GPU tab is switched off.
+  GpuPage {
+    embedded: true
+    visible: Model.parseModules(Model.settingValue(root.settings, "tabs")).indexOf("gpu") === -1
+    service: root.service
+    settings: root.settings
+    temperatureUnit: root.temperatureUnit
+    foreground: root.foreground
+    fontFamily: root.fontFamily
   }
 
   Card {
