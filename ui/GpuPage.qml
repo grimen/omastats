@@ -49,7 +49,7 @@ Column {
       foreground: root.foreground
 
       CardHeader {
-        title: Model.gpuKindLabel(gpuCard.gpu)
+        title: Model.gpuKindLabel(gpuCard.gpu, Model.gpuNumber(root.snap, gpuCard.gpu))
         detail: !gpuCard.gpu ? "" : Model.gpuFullName(gpuCard.gpu) + (gpuCard.gpu.asleep ? ", asleep" : "")
         foreground: root.foreground
         fontFamily: root.fontFamily
