@@ -430,6 +430,7 @@ class GpuSampler:
     RESCAN = 5.0
     VENDORS = {"0x1002": "amd", "0x8086": "intel", "0x10de": "nvidia"}
     FALLBACK_NAMES = {"amd": "AMD", "intel": "Intel", "nvidia": "NVIDIA"}
+    AMD_NAMES = "/usr/share/libdrm/amdgpu.ids"
 
     def __init__(self) -> None:
         self.devices: list[dict] = []
@@ -455,6 +456,27 @@ class GpuSampler:
                     slot = ""
                 out.append((device, slot))
         return out
+
+    @staticmethod
+    def _is_integrated(kind: str, slot: str, has_mem_busy: bool) -> bool:
+        """amdgpu hides `mem_busy_percent` on APUs, Intel's integrated GPU sits
+        at 00:02.0, and everything else is a card of its own."""
+        if kind == "amd":
+            return not has_mem_busy
+        return kind == "intel" and slot == "0000:00:02.0"
+
+    @staticmethod
+    def _removable(device: str) -> bool:
+        """True when the card or a bridge above it is marked removable (eGPU)."""
+        try:
+            path = os.path.realpath(device)
+        except OSError:
+            return False
+        while path.startswith("/sys/devices/") and path.count("/") > 3:
+            if read_text(f"{path}/removable") == "removable":
+                return True
+            path = os.path.dirname(path)
+        return False
 
     @staticmethod
     def _power_state(runtime_status: str) -> str:
@@ -496,8 +518,10 @@ class GpuSampler:
                 break
             mem_total = next((d["memTotal"] for d in previous if d["id"] == slot), None)
             self.devices.append({
+                "integrated": self._is_integrated(kind, slot, os.path.exists(f"{device}/mem_busy_percent")),
+                "external": self._removable(device),
                 "kind": kind, "card": device, "hwmon": hwmon, "id": slot, "memTotal": mem_total,
-                "name": self._pci_name(slot) or self.FALLBACK_NAMES[kind],
+                "name": (self._amd_marketing_name(device) if kind == "amd" else "") or self._pci_name(slot) or self.FALLBACK_NAMES[kind],
             })
         # nvidia-smi enumerates its GPUs when it starts, so it restarts with them.
         nvidia = any(d["kind"] == "nvidia" for d in self.devices)
@@ -515,6 +539,23 @@ class GpuSampler:
         if len(parts) != 3:
             return ""
         return f"{parts[0][-4:]:0>4}:{parts[1]}:{parts[2]}"
+
+    @classmethod
+    def _amd_marketing_name(cls, device: str) -> str:
+        """libdrm's `device id, revision, marketing name` table tells apart cards
+        that share one PCI id, which pci.ids can only name as a family."""
+        try:
+            wanted = (int(read_text(f"{device}/device"), 16), int(read_text(f"{device}/revision"), 16))
+        except ValueError:
+            return ""
+        for line in read_text(cls.AMD_NAMES).splitlines():
+            fields = [field.strip() for field in line.split(",")]
+            try:
+                if len(fields) >= 3 and fields[2] and (int(fields[0], 16), int(fields[1], 16)) == wanted:
+                    return bounded_text(fields[2])
+            except ValueError:
+                continue
+        return ""
 
     @staticmethod
     def _pci_name(slot: str) -> str:
@@ -643,7 +684,8 @@ class GpuSampler:
             state = self._state(device)
             if state == "gone":
                 self.last_scan = None
-            elif state == "asleep":
+                continue
+            if state == "asleep":
                 gpus.append({
                     "id": device["id"], "name": device["name"], "vendor": device["kind"],
                     "util": None, "memTotal": device["memTotal"], "asleep": True,
@@ -653,6 +695,8 @@ class GpuSampler:
                 if gpu.get("memTotal") is not None:
                     device["memTotal"] = gpu["memTotal"]
                 gpus.append(gpu)
+            gpus[-1]["kind"] = "integrated" if device["integrated"] else "discrete"
+            gpus[-1]["external"] = device["external"]
         gpus.sort(key=lambda g: -(g.get("memTotal") or 0))
         return gpus
 

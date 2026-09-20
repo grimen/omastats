@@ -13,6 +13,7 @@ const NVIDIA_QUERY: &str =
     "name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,clocks.gr,clocks.max.gr,fan.speed,pci.bus_id";
 const GPU_LIMIT: usize = 8;
 const GPU_RESCAN: Duration = Duration::from_secs(5);
+const AMD_NAMES: &str = "/usr/share/libdrm/amdgpu.ids";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -67,8 +68,34 @@ fn power_state(runtime_status: Option<&str>) -> State {
     }
 }
 
+/// libdrm's `device id, revision, marketing name` table tells apart cards that
+/// share one PCI id, which pci.ids can only name as a family.
+fn amd_marketing_name(table: &str, device: &str, revision: &str) -> Option<String> {
+    let hex = |s: &str| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok();
+    let (device, revision) = (hex(device)?, hex(revision)?);
+    table.lines().find_map(|line| {
+        let mut fields = line.split(',');
+        let matches = hex(fields.next()?)? == device && hex(fields.next()?)? == revision;
+        let name = fields.next()?.trim();
+        (matches && !name.is_empty()).then(|| name.to_string())
+    })
+}
+
+/// amdgpu hides `mem_busy_percent` on APUs, Intel's integrated GPU sits at
+/// 00:02.0, and everything else is a card of its own.
+fn is_integrated(kind: Kind, slot: &str, has_mem_busy: bool) -> bool {
+    match kind {
+        Kind::Amd => !has_mem_busy,
+        Kind::Intel => slot == "0000:00:02.0",
+        Kind::Nvidia => false,
+    }
+}
+
 struct Device {
     kind: Kind,
+    integrated: bool,
+    /// Behind a port the kernel marks removable: Thunderbolt or USB4.
+    external: bool,
     card: String,
     hwmon: Option<String>,
     name: String,
@@ -167,10 +194,24 @@ impl GpuSampler {
                 .into_iter()
                 .next()
                 .map(|hw| format!("{device}/hwmon/{hw}"));
-            let name = bounded_text(&Self::pci_name(&id), EXTERNAL_TEXT_LIMIT);
+            let marketing = (kind == Kind::Amd)
+                .then(|| {
+                    amd_marketing_name(
+                        &read_text(AMD_NAMES)?,
+                        &read_text(format!("{device}/device"))?,
+                        &read_text(format!("{device}/revision"))?,
+                    )
+                })
+                .flatten();
+            let name = marketing.unwrap_or_else(|| Self::pci_name(&id));
+            let name = bounded_text(&name, EXTERNAL_TEXT_LIMIT);
             let mem_total = previous.iter().find(|d| d.id == id).and_then(|d| d.mem_total);
+            let has_mem_busy =
+                std::path::Path::new(&format!("{device}/mem_busy_percent")).exists();
             self.devices.push(Device {
                 kind,
+                integrated: is_integrated(kind, &id, has_mem_busy),
+                external: Self::removable(&device),
                 card: device,
                 hwmon,
                 name,
@@ -189,6 +230,23 @@ impl GpuSampler {
         if nvidia && !(which("nvidia-smi") && self.start_nvidia()) {
             self.devices.retain(|d| d.kind != Kind::Nvidia);
         }
+    }
+
+    /// True when the card or a bridge above it is marked removable (eGPU).
+    fn removable(device: &str) -> bool {
+        let mut path = match std::fs::canonicalize(device) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        while path.starts_with("/sys/devices/") && path.components().count() > 4 {
+            if read_text(path.join("removable")).as_deref() == Some("removable") {
+                return true;
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+        false
     }
 
     fn pci_slot(device: &str) -> String {
@@ -373,8 +431,16 @@ impl GpuSampler {
         self.refresh();
         let mut gpus: Vec<Value> = Vec::new();
         for index in 0..self.devices.len() {
-            match self.devices[index].state() {
-                State::Gone => self.last_scan = None,
+            let state = self.devices[index].state();
+            if state == State::Gone {
+                self.last_scan = None;
+                continue;
+            }
+            let device = &self.devices[index];
+            let kind = if device.integrated { "integrated" } else { "discrete" };
+            let external = device.external;
+            match state {
+                State::Gone => {}
                 State::Asleep => {
                     let device = &self.devices[index];
                     gpus.push(json!({
@@ -394,6 +460,10 @@ impl GpuSampler {
                     gpus.push(gpu);
                 }
             }
+            if let Some(gpu) = gpus.last_mut() {
+                gpu["kind"] = json!(kind);
+                gpu["external"] = json!(external);
+            }
         }
         let mem = |v: &Value| v["memTotal"].as_f64().unwrap_or(0.0);
         gpus.sort_by(|a, b| mem(b).total_cmp(&mem(a)));
@@ -410,13 +480,32 @@ impl GpuSampler {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_bus_id, power_state, State};
+    use super::{amd_marketing_name, is_integrated, normalize_bus_id, power_state, Kind, State};
 
     #[test]
     fn bus_ids_normalize_to_the_sysfs_form() {
         assert_eq!(normalize_bus_id("00000000:01:00.0"), "0000:01:00.0");
         assert_eq!(normalize_bus_id(" 0000:C8:00.0 "), "0000:c8:00.0");
         assert_eq!(normalize_bus_id("garbage"), "");
+    }
+
+    #[test]
+    fn amd_cards_sharing_a_pci_id_are_named_by_revision() {
+        let table = "# comment\n1.0.0\n744C,\tC8,\tAMD Radeon RX 7900 XTX\n744C,\tCC,\tAMD Radeon RX 7900 XT\n";
+        let name = |device, revision| amd_marketing_name(table, device, revision);
+        assert_eq!(name("0x744c", "0xcc").as_deref(), Some("AMD Radeon RX 7900 XT"));
+        assert_eq!(name("0x744c", "0xc8").as_deref(), Some("AMD Radeon RX 7900 XTX"));
+        assert_eq!(name("0x744c", "0x01"), None);
+        assert_eq!(name("", "0xcc"), None);
+    }
+
+    #[test]
+    fn integrated_gpus_are_told_from_cards() {
+        assert!(is_integrated(Kind::Amd, "0000:c8:00.0", false));
+        assert!(!is_integrated(Kind::Amd, "0000:03:00.0", true));
+        assert!(is_integrated(Kind::Intel, "0000:00:02.0", false));
+        assert!(!is_integrated(Kind::Intel, "0000:03:00.0", false));
+        assert!(!is_integrated(Kind::Nvidia, "0000:01:00.0", false));
     }
 
     #[test]

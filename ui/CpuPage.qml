@@ -171,7 +171,7 @@ Column {
       foreground: root.foreground
 
       CardHeader {
-        title: "GPU"
+        title: Model.gpuKindLabel(gpuCard.gpu, Model.gpuNumber(root.snap, gpuCard.gpu))
         detail: !gpuCard.gpu ? "" : gpuCard.gpu.asleep ? "Asleep" : root.headerDetail(gpuCard.gpu.mhz, gpuCard.gpu.temp)
         foreground: root.foreground
         fontFamily: root.fontFamily
@@ -187,7 +187,7 @@ Column {
       }
 
       StatRow {
-        label: gpuCard.gpu ? Model.shortGpuName(gpuCard.gpu.name) : "Processor"
+        label: gpuCard.gpu ? Model.gpuFullName(gpuCard.gpu) : "Processor"
         dot: root.s1
         value: gpuCard.gpu && isFinite(Number(gpuCard.gpu.util)) ? String(Math.round(gpuCard.gpu.util)) : "—"
         unit: gpuCard.gpu && isFinite(Number(gpuCard.gpu.util)) ? "%" : ""

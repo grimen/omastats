@@ -34,6 +34,7 @@ executable by absolute path when compatible. Its runtime inputs are deliberately
 narrow:
 
 - read-only system telemetry from `/proc` and `/sys`;
+- libdrm's `/usr/share/libdrm/amdgpu.ids` table, read (bounded) to name AMD GPUs;
 - `nvidia-smi` for NVIDIA telemetry and `lspci` for a human-readable GPU name;
 - `ip` for interface addresses, `iw` for Wi-Fi details, and `ss` for TCP socket
   counters; and
