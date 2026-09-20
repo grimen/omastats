@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import qs.Commons
 import qs.Ui
 import "../Model.js" as Model
@@ -26,6 +27,31 @@ Column {
   property string fontFamily: Style.font.family
   property real columnWidth: Style.space(66)
   property int maxRows: 200
+
+  // Ending a process: rows whose processes are all the user's own carry their
+  // pids. A click selects the row, which offers End and Force quit; each needs
+  // a second click within a few seconds, so a stray click ends nothing.
+  property string selectedName: ""
+  property string armed: ""
+
+  function endable(proc) { return !!proc && Array.isArray(proc.pids) && proc.pids.length > 0 }
+
+  function select(proc) {
+    armed = ""
+    selectedName = endable(proc) && selectedName !== proc.name ? String(proc.name) : ""
+  }
+
+  function signalProcesses(proc, signalName) {
+    if (!endable(proc)) return
+    if (armed !== signalName) { armed = signalName; disarm.restart(); return }
+    var command = ["/usr/bin/kill", "-" + signalName, "--"]
+    for (var i = 0; i < proc.pids.length; i++) command.push(String(Math.floor(Number(proc.pids[i]))))
+    Quickshell.execDetached(command)
+    armed = ""
+    selectedName = ""
+  }
+
+  Timer { id: disarm; interval: 3000; onTriggered: root.armed = "" }
 
   readonly property bool expanded: expandable && !!host && host.processesExpanded === true
   readonly property string query: host ? String(host.processQuery || "") : ""
@@ -167,65 +193,123 @@ Column {
       id: procRow
       required property int index
       readonly property var proc: root.shown[index] || ({})
+      readonly property bool selected: root.selectedName !== "" && root.selectedName === proc.name && root.endable(proc)
       width: parent.width
-      height: Style.space(20)
+      height: Style.space(20) + (selected ? Style.space(22) : 0)
 
-      Row {
-        anchors.left: parent.left
-        anchors.right: figures.left
-        anchors.rightMargin: Style.space(10)
-        anchors.verticalCenter: parent.verticalCenter
-        spacing: Style.space(6)
+      Item {
+        id: line
+        width: parent.width
+        height: Style.space(20)
 
-        Text {
-          textFormat: Text.PlainText
-          text: procRow.proc.name || ""
-          color: root.foreground
-          opacity: 0.9
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-          elide: Text.ElideRight
-          width: Math.min(implicitWidth, parent.width - (countText.visible ? countText.implicitWidth + Style.space(6) : 0))
-          anchors.verticalCenter: parent.verticalCenter
+        Rectangle {
+          anchors.fill: parent
+          anchors.leftMargin: -Style.space(4)
+          anchors.rightMargin: -Style.space(4)
+          radius: Style.space(4)
+          color: Util.alpha(root.foreground, procRow.selected ? 0.08 : rowArea.containsMouse ? 0.05 : 0)
         }
 
-        Text {
-          id: countText
-          textFormat: Text.PlainText
-          visible: (procRow.proc.count || 1) > 1
-          text: "×" + (procRow.proc.count || 1)
-          color: root.foreground
-          opacity: 0.4
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
+        MouseArea {
+          id: rowArea
+          anchors.fill: parent
+          enabled: root.endable(procRow.proc)
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: root.select(procRow.proc)
+        }
+
+        Row {
+          anchors.left: parent.left
+          anchors.right: figures.left
+          anchors.rightMargin: Style.space(10)
           anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(6)
+
+          Text {
+            textFormat: Text.PlainText
+            text: procRow.proc.name || ""
+            color: root.foreground
+            opacity: 0.9
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            elide: Text.ElideRight
+            width: Math.min(implicitWidth, parent.width - (countText.visible ? countText.implicitWidth + Style.space(6) : 0))
+            anchors.verticalCenter: parent.verticalCenter
+          }
+
+          Text {
+            id: countText
+            textFormat: Text.PlainText
+            visible: (procRow.proc.count || 1) > 1
+            text: "×" + (procRow.proc.count || 1)
+            color: root.foreground
+            opacity: 0.4
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            anchors.verticalCenter: parent.verticalCenter
+          }
+        }
+
+        Row {
+          id: figures
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(8)
+
+          Repeater {
+            model: root.columns
+            delegate: Item {
+              id: cell
+              required property var modelData
+              readonly property var parts: root.figure(procRow.proc, modelData)
+              width: root.columnWidth
+              height: Style.space(20)
+
+              Measure {
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                value: cell.parts.value
+                unit: cell.parts.unit
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                bold: false
+                valueOpacity: 0.9
+              }
+            }
+          }
         }
       }
 
       Row {
-        id: figures
+        visible: procRow.selected
+        anchors.top: line.bottom
         anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        spacing: Style.space(8)
+        height: Style.space(22)
+        spacing: Style.space(14)
 
         Repeater {
-          model: root.columns
-          delegate: Item {
-            id: cell
-            required property var modelData
-            readonly property var parts: root.figure(procRow.proc, modelData)
-            width: root.columnWidth
-            height: Style.space(20)
+          model: [{ signal: "TERM", label: "End" }, { signal: "KILL", label: "Force quit" }]
 
-            Measure {
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              value: cell.parts.value
-              unit: cell.parts.unit
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              bold: false
-              valueOpacity: 0.9
+          delegate: Text {
+            required property var modelData
+            readonly property bool armed: root.armed === modelData.signal
+            textFormat: Text.PlainText
+            anchors.verticalCenter: parent.verticalCenter
+            text: !armed ? modelData.label
+              : modelData.label + " " + ((procRow.proc.count || 1) > 1 ? (procRow.proc.count + " processes") : String(procRow.proc.name || "")) + "?"
+            color: armed ? Color.urgent : actionArea.containsMouse ? Color.accent : root.foreground
+            opacity: armed || actionArea.containsMouse ? 1 : 0.7
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: armed
+
+            MouseArea {
+              id: actionArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.signalProcesses(procRow.proc, modelData.signal)
             }
           }
         }

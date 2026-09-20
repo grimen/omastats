@@ -3,11 +3,14 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
+use std::os::unix::fs::MetadataExt;
 use std::time::{Duration, Instant};
 
 const PROC_LIMIT: usize = 6;
 const FULL_LIMIT: usize = 400;
 const CONNECTION_LIMIT: usize = 12;
+/// A group is only offered for ending when every one of its pids fits.
+const END_PID_LIMIT: usize = 32;
 const PROCESS_SCAN_LIMIT: usize = 16_384;
 const FD_SCAN_LIMIT: usize = 4096;
 const PROC_FILE_LIMIT: u64 = 64 * 1024;
@@ -28,6 +31,19 @@ struct Group {
     read: f64,
     write: f64,
     count: u32,
+    pids: Vec<u32>,
+    /// Every process of the group belongs to the user running the sampler.
+    own: bool,
+}
+
+/// The pids the UI may signal: all of the group's, and only when they are all
+/// the user's own and few enough to list in full.
+fn endable_pids(own: bool, pids: &[u32], count: u32) -> &[u32] {
+    if own && count as usize == pids.len() {
+        pids
+    } else {
+        &[]
+    }
 }
 
 pub struct ProcessSampler {
@@ -102,6 +118,7 @@ impl ProcessSampler {
             Ok(e) => e,
             Err(_) => return json!({ "cpu": [], "mem": [], "io": [] }),
         };
+        let uid = unsafe { libc::getuid() };
         let mut scanned = 0usize;
         for entry in entries.filter_map(Result::ok) {
             let file_name = entry.file_name();
@@ -188,7 +205,13 @@ impl ProcessSampler {
                 read: 0.0,
                 write: 0.0,
                 count: 0,
+                pids: Vec::new(),
+                own: true,
             });
+            group.own &= entry.metadata().is_ok_and(|m| m.uid() == uid);
+            if group.pids.len() < END_PID_LIMIT {
+                group.pids.push(pid);
+            }
             group.cpu += cpu.max(0.0);
             group.mem += rss;
             group.read += io_read;
@@ -203,6 +226,7 @@ impl ProcessSampler {
             json!({
                 "name": g.name, "pid": g.pid, "count": g.count,
                 "cpu": round1(g.cpu), "mem": g.mem, "read": g.read, "write": g.write,
+                "pids": endable_pids(g.own, &g.pids, g.count),
             })
         };
 
@@ -472,5 +496,18 @@ fn cgroup_label(cgroup: &str) -> String {
         "other".to_string()
     } else {
         bounded_text(stem, EXTERNAL_TEXT_LIMIT)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::endable_pids;
+
+    #[test]
+    fn only_complete_groups_of_own_processes_can_be_ended() {
+        assert_eq!(endable_pids(true, &[10, 11], 2), &[10, 11]);
+        assert!(endable_pids(false, &[10, 11], 2).is_empty());
+        // More processes than were listed: ending some of them would mislead.
+        assert!(endable_pids(true, &[10, 11], 40).is_empty());
     }
 }
