@@ -25,7 +25,8 @@ OmaStats is an independent project and is not affiliated with Bjango.
 | Sensors | any temperatures and fans you pick  | CPU/GPU/fan rings, every hwmon temperature and fan                    |
 | Battery | glyph by level · %                  | Charge and health rings, charge history, power, cycles, peripherals   |
 
-Battery and GPU only appear when the hardware exists. With several GPUs the
+Battery and GPU only appear when the hardware exists; on a desktop the Battery
+tab still appears for the batteries of connected devices such as mice and keyboards. With several GPUs the
 bar readout follows the one with the most memory unless a **Source** is picked
 in Settings; **Every GPU** draws them all in the one readout, a colour each, with the
 busiest GPU's figure. GPUs are numbered by memory size, largest first, so GPU 1 is the default, and labelled integrated,
