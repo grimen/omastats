@@ -430,6 +430,7 @@ class GpuSampler:
     RESCAN = 5.0
     VENDORS = {"0x1002": "amd", "0x8086": "intel", "0x10de": "nvidia"}
     FALLBACK_NAMES = {"amd": "AMD", "intel": "Intel", "nvidia": "NVIDIA"}
+    AMD_NAMES = "/usr/share/libdrm/amdgpu.ids"
 
     def __init__(self) -> None:
         self.devices: list[dict] = []
@@ -497,7 +498,7 @@ class GpuSampler:
             mem_total = next((d["memTotal"] for d in previous if d["id"] == slot), None)
             self.devices.append({
                 "kind": kind, "card": device, "hwmon": hwmon, "id": slot, "memTotal": mem_total,
-                "name": self._pci_name(slot) or self.FALLBACK_NAMES[kind],
+                "name": (self._amd_marketing_name(device) if kind == "amd" else "") or self._pci_name(slot) or self.FALLBACK_NAMES[kind],
             })
         # nvidia-smi enumerates its GPUs when it starts, so it restarts with them.
         nvidia = any(d["kind"] == "nvidia" for d in self.devices)
@@ -515,6 +516,23 @@ class GpuSampler:
         if len(parts) != 3:
             return ""
         return f"{parts[0][-4:]:0>4}:{parts[1]}:{parts[2]}"
+
+    @classmethod
+    def _amd_marketing_name(cls, device: str) -> str:
+        """libdrm's `device id, revision, marketing name` table tells apart cards
+        that share one PCI id, which pci.ids can only name as a family."""
+        try:
+            wanted = (int(read_text(f"{device}/device"), 16), int(read_text(f"{device}/revision"), 16))
+        except ValueError:
+            return ""
+        for line in read_text(cls.AMD_NAMES).splitlines():
+            fields = [field.strip() for field in line.split(",")]
+            try:
+                if len(fields) >= 3 and fields[2] and (int(fields[0], 16), int(fields[1], 16)) == wanted:
+                    return bounded_text(fields[2])
+            except ValueError:
+                continue
+        return ""
 
     @staticmethod
     def _pci_name(slot: str) -> str:

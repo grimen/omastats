@@ -13,6 +13,7 @@ const NVIDIA_QUERY: &str =
     "name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,clocks.gr,clocks.max.gr,fan.speed,pci.bus_id";
 const GPU_LIMIT: usize = 8;
 const GPU_RESCAN: Duration = Duration::from_secs(5);
+const AMD_NAMES: &str = "/usr/share/libdrm/amdgpu.ids";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -65,6 +66,19 @@ fn power_state(runtime_status: Option<&str>) -> State {
         Some("suspended") => State::Asleep,
         _ => State::Active,
     }
+}
+
+/// libdrm's `device id, revision, marketing name` table tells apart cards that
+/// share one PCI id, which pci.ids can only name as a family.
+fn amd_marketing_name(table: &str, device: &str, revision: &str) -> Option<String> {
+    let hex = |s: &str| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok();
+    let (device, revision) = (hex(device)?, hex(revision)?);
+    table.lines().find_map(|line| {
+        let mut fields = line.split(',');
+        let matches = hex(fields.next()?)? == device && hex(fields.next()?)? == revision;
+        let name = fields.next()?.trim();
+        (matches && !name.is_empty()).then(|| name.to_string())
+    })
 }
 
 struct Device {
@@ -167,7 +181,17 @@ impl GpuSampler {
                 .into_iter()
                 .next()
                 .map(|hw| format!("{device}/hwmon/{hw}"));
-            let name = bounded_text(&Self::pci_name(&id), EXTERNAL_TEXT_LIMIT);
+            let marketing = (kind == Kind::Amd)
+                .then(|| {
+                    amd_marketing_name(
+                        &read_text(AMD_NAMES)?,
+                        &read_text(format!("{device}/device"))?,
+                        &read_text(format!("{device}/revision"))?,
+                    )
+                })
+                .flatten();
+            let name = marketing.unwrap_or_else(|| Self::pci_name(&id));
+            let name = bounded_text(&name, EXTERNAL_TEXT_LIMIT);
             let mem_total = previous.iter().find(|d| d.id == id).and_then(|d| d.mem_total);
             self.devices.push(Device {
                 kind,
@@ -397,13 +421,23 @@ impl GpuSampler {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_bus_id, power_state, State};
+    use super::{amd_marketing_name, normalize_bus_id, power_state, State};
 
     #[test]
     fn bus_ids_normalize_to_the_sysfs_form() {
         assert_eq!(normalize_bus_id("00000000:01:00.0"), "0000:01:00.0");
         assert_eq!(normalize_bus_id(" 0000:C8:00.0 "), "0000:c8:00.0");
         assert_eq!(normalize_bus_id("garbage"), "");
+    }
+
+    #[test]
+    fn amd_cards_sharing_a_pci_id_are_named_by_revision() {
+        let table = "# comment\n1.0.0\n744C,\tC8,\tAMD Radeon RX 7900 XTX\n744C,\tCC,\tAMD Radeon RX 7900 XT\n";
+        let name = |device, revision| amd_marketing_name(table, device, revision);
+        assert_eq!(name("0x744c", "0xcc").as_deref(), Some("AMD Radeon RX 7900 XT"));
+        assert_eq!(name("0x744c", "0xc8").as_deref(), Some("AMD Radeon RX 7900 XTX"));
+        assert_eq!(name("0x744c", "0x01"), None);
+        assert_eq!(name("", "0xcc"), None);
     }
 
     #[test]
