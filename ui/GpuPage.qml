@@ -58,11 +58,13 @@ Column {
       Item {
         visible: !!gpuCard.gpu && !gpuCard.gpu.asleep
         width: parent.width
-        height: rings.implicitHeight
+        // A little extra room above the gauges, so they sit clear of the header.
+        height: rings.implicitHeight + 5
 
         Row {
           id: rings
           anchors.horizontalCenter: parent.horizontalCenter
+          anchors.bottom: parent.bottom
           spacing: Style.space(18)
 
           RingGauge {
