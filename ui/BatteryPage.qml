@@ -24,8 +24,6 @@ Column {
   readonly property color danger: service ? service.danger : Color.urgent
 
   readonly property var battery: snap.battery || ({})
-  // A desktop has no battery of its own, only its devices' to show.
-  readonly property bool present: !!battery.present
   readonly property bool present: battery.present === true
   readonly property real percent: Model.num(battery.percent)
   readonly property string status: String(battery.status || "Unknown")
