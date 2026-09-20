@@ -315,10 +315,23 @@ impl GpuSampler {
 
     fn hwmon_value(device: &Device, prefix: &str, labels: &[&str]) -> Option<f64> {
         let hwmon = device.hwmon.as_ref()?;
+        let entries = list_dir(hwmon);
+        // Discrete AMD cards report power as `power1_average` only.
+        Self::hwmon_channel(hwmon, &entries, prefix, "_input", labels)
+            .or_else(|| Self::hwmon_channel(hwmon, &entries, prefix, "_average", labels))
+    }
+
+    fn hwmon_channel(
+        hwmon: &str,
+        entries: &[String],
+        prefix: &str,
+        suffix: &str,
+        labels: &[&str],
+    ) -> Option<f64> {
         let mut chosen: Option<String> = None;
-        for entry in list_dir(hwmon) {
-            if entry.starts_with(prefix) && entry.ends_with("_input") {
-                let key = &entry[..entry.len() - 6];
+        for entry in entries {
+            if entry.starts_with(prefix) && entry.ends_with(suffix) {
+                let key = &entry[..entry.len() - suffix.len()];
                 let label = read_text(format!("{hwmon}/{key}_label"))
                     .unwrap_or_default()
                     .to_lowercase();
