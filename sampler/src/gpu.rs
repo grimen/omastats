@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const NVIDIA_QUERY: &str =
-    "name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,clocks.gr,clocks.max.gr,fan.speed,pci.bus_id";
+    "name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,clocks.gr,clocks.max.gr,fan.speed,pci.bus_id,utilization.memory,utilization.encoder,utilization.decoder,clocks.mem,power.limit";
 const GPU_LIMIT: usize = 8;
 const GPU_RESCAN: Duration = Duration::from_secs(5);
 const AMD_NAMES: &str = "/usr/share/libdrm/amdgpu.ids";
@@ -322,6 +322,8 @@ impl GpuSampler {
                     continue;
                 }
                 let num = |s: &str| s.parse::<f64>().ok();
+                // Older drivers may not know the newer fields: they stay null.
+                let extra = |index: usize| parts.get(index).and_then(|s| num(s));
                 let mem_used = num(parts[2]).map(|v| v * 1024.0 * 1024.0);
                 let mem_total = num(parts[3]).map(|v| v * 1024.0 * 1024.0);
                 let id = normalize_bus_id(parts[9]);
@@ -337,6 +339,13 @@ impl GpuSampler {
                     "mhz": opt_f64(num(parts[6])),
                     "maxMhz": opt_f64(num(parts[7])),
                     "fan": opt_f64(num(parts[8])),
+                    "memBusy": opt_f64(extra(10)),
+                    "vcnBusy": opt_f64(match (extra(11), extra(12)) {
+                        (Some(enc), Some(dec)) => Some(enc.max(dec)),
+                        (enc, dec) => enc.or(dec),
+                    }),
+                    "memMhz": opt_f64(extra(13)),
+                    "powerCap": opt_f64(extra(14)),
                 });
                 if let Ok(mut slot) = latest.lock() {
                     slot.insert(id, snapshot);
@@ -347,12 +356,13 @@ impl GpuSampler {
         true
     }
 
-    fn hwmon_value(device: &Device, prefix: &str, labels: &[&str]) -> Option<f64> {
+    /// The channel with one of `labels`, else the first one unless `exact`.
+    fn hwmon_value(device: &Device, prefix: &str, labels: &[&str], exact: bool) -> Option<f64> {
         let hwmon = device.hwmon.as_ref()?;
         let entries = list_dir(hwmon);
         // Discrete AMD cards report power as `power1_average` only.
-        Self::hwmon_channel(hwmon, &entries, prefix, "_input", labels)
-            .or_else(|| Self::hwmon_channel(hwmon, &entries, prefix, "_average", labels))
+        Self::hwmon_channel(hwmon, &entries, prefix, "_input", labels, exact)
+            .or_else(|| Self::hwmon_channel(hwmon, &entries, prefix, "_average", labels, exact))
     }
 
     fn hwmon_channel(
@@ -361,6 +371,7 @@ impl GpuSampler {
         prefix: &str,
         suffix: &str,
         labels: &[&str],
+        exact: bool,
     ) -> Option<f64> {
         let mut chosen: Option<String> = None;
         for entry in entries {
@@ -370,7 +381,7 @@ impl GpuSampler {
                     .unwrap_or_default()
                     .to_lowercase();
                 let preferred = labels.contains(&label.as_str());
-                if preferred || chosen.is_none() {
+                if preferred || (chosen.is_none() && !exact) {
                     chosen = Some(entry.clone());
                     if preferred {
                         break;
@@ -403,10 +414,19 @@ impl GpuSampler {
         let util = read_f64(format!("{card}/gpu_busy_percent"));
         let mem_used = read_f64(format!("{card}/mem_info_vram_used"));
         let mem_total = read_f64(format!("{card}/mem_info_vram_total"));
-        let temp = Self::hwmon_value(device, "temp", &["edge", "junction"]).map(|t| t / 1000.0);
-        let power =
-            Self::hwmon_value(device, "power", &["ppt", "power"]).map(|p| p / 1_000_000.0);
-        let mhz = Self::hwmon_value(device, "freq", &["sclk"])
+        let hwmon = |prefix: &str, label: &str| Self::hwmon_value(device, prefix, &[label], true);
+        let temp =
+            Self::hwmon_value(device, "temp", &["edge", "junction"], false).map(|t| t / 1000.0);
+        let power = Self::hwmon_value(device, "power", &["ppt", "power"], false)
+            .map(|p| p / 1_000_000.0);
+        let power_cap = device
+            .hwmon
+            .as_ref()
+            .and_then(|h| read_f64(format!("{h}/power1_cap")))
+            .map(|p| p / 1_000_000.0);
+        let fan_rpm = device.hwmon.as_ref().and_then(|h| read_f64(format!("{h}/fan1_input")));
+        let fan_max = device.hwmon.as_ref().and_then(|h| read_f64(format!("{h}/fan1_max")));
+        let mhz = Self::hwmon_value(device, "freq", &["sclk"], false)
             .map(|f| f / 1_000_000.0)
             .or_else(|| read_f64(format!("{parent}/gt_cur_freq_mhz")))
             .or_else(|| read_f64(format!("{parent}/gt/gt0/rps_cur_freq_mhz")));
@@ -423,6 +443,14 @@ impl GpuSampler {
             "mhz": opt_f64(mhz),
             "maxMhz": opt_f64(max_mhz),
             "fan": Value::Null,
+            "tempJunction": opt_f64(hwmon("temp", "junction").map(|t| t / 1000.0)),
+            "tempMem": opt_f64(hwmon("temp", "mem").map(|t| t / 1000.0)),
+            "memBusy": opt_f64(read_f64(format!("{card}/mem_busy_percent"))),
+            "vcnBusy": opt_f64(read_f64(format!("{card}/vcn_busy_percent"))),
+            "memMhz": opt_f64(hwmon("freq", "mclk").map(|f| f / 1_000_000.0)),
+            "fanRpm": opt_f64(fan_rpm),
+            "fanMax": opt_f64(fan_max),
+            "powerCap": opt_f64(power_cap),
         })
     }
 
