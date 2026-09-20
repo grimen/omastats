@@ -583,17 +583,20 @@ class GpuSampler:
         hwmon = device["hwmon"]
         if not hwmon:
             return None
-        chosen = None
-        for entry in list_dir(hwmon):
-            if entry.startswith(prefix) and entry.endswith("_input"):
-                label = read_text(f"{hwmon}/{entry[:-6]}_label").lower()
-                if label in labels or chosen is None:
-                    chosen = entry
-                    if label in labels:
-                        break
-        if not chosen:
-            return None
-        return read_float(f"{hwmon}/{chosen}")
+        entries = list_dir(hwmon)
+        # Discrete AMD cards report power as `power1_average` only.
+        for suffix in ("_input", "_average"):
+            chosen = None
+            for entry in entries:
+                if entry.startswith(prefix) and entry.endswith(suffix):
+                    label = read_text(f"{hwmon}/{entry[:-len(suffix)]}_label").lower()
+                    if label in labels or chosen is None:
+                        chosen = entry
+                        if label in labels:
+                            break
+            if chosen:
+                return read_float(f"{hwmon}/{chosen}")
+        return None
 
     def _sample_device(self, device: dict) -> dict:
         kind, card = device["kind"], device["card"]
