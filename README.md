@@ -17,7 +17,7 @@ OmaStats is an independent project and is not affiliated with Bjango.
 
 | Module  | Bar readout                         | Panel                                                                 |
 |---------|-------------------------------------|-----------------------------------------------------------------------|
-| CPU     | glyph · user/system history · %     | User/system history, per-core rings, load, uptime, GPU, top processes |
+| CPU     | glyph · user/system history · %     | User/system history, per-core rings, load, uptime, power profile switch, GPU, top processes |
 | GPU     | glyph · utilisation history · %     | Shown on the CPU page (NVIDIA via `nvidia-smi`, AMD/Intel via sysfs)  |
 | Memory  | glyph · used history · %            | Swap and memory rings, breakdown, processes                           |
 | Disks   | glyph · read/write history · rates  | Volumes (click to open in Files), activity for all disks or one, processes |
@@ -117,7 +117,7 @@ edited there by hand or through Setup → Plugins:
 | `historySeconds`          | `240`                                     | How far back the graphs reach, in seconds                 |
 | `publicIp`                | `true`                                    | Look up the public address (api.ipify.org) on the Network page |
 | `showProcesses`           | `true`                                    | Top processes on every page                               |
-| `showCores`, `showLoad`, `showGpu` | `true`                           | CPU page sections                                         |
+| `showCores`, `showLoad`, `showPowerProfile`, `showGpu` | `true`       | CPU page sections                                         |
 | `showBreakdown`           | `true`                                    | Memory breakdown                                          |
 | `showVolumes`, `showActivity` | `true`                                | Disks page sections                                       |
 | `showInterfaces`, `showTotals`, `showAddresses` | `true`              | Network page sections                                     |

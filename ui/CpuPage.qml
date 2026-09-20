@@ -1,5 +1,8 @@
 import QtQuick
+import Quickshell
+import Quickshell.Services.UPower
 import qs.Commons
+import qs.Ui
 import "../Model.js" as Model
 
 Column {
@@ -28,6 +31,21 @@ Column {
   readonly property var efficiency: Array.isArray(cpu.efficiency) ? cpu.efficiency : []
   readonly property bool hybrid: efficiency.length > 0 && efficiency.length < cores.length
 
+  // power-profiles-daemon's profile, switched through Omarchy's own command so
+  // the choice is remembered per power source like the shell's power panel does.
+  readonly property string powerProfile: PowerProfiles.profile === PowerProfile.Performance ? "performance"
+    : PowerProfiles.profile === PowerProfile.PowerSaver ? "power-saver" : "balanced"
+  readonly property var powerProfiles: {
+    var out = [{ value: "power-saver", label: "Power saver" }, { value: "balanced", label: "Balanced" }]
+    if (PowerProfiles.hasPerformanceProfile) out.push({ value: "performance", label: "Performance" })
+    return out
+  }
+
+  function setPowerProfile(profile) {
+    if (profile === powerProfile) return
+    Quickshell.execDetached(["/usr/share/omarchy/bin/omarchy-powerprofiles-set", "autodetect", String(profile)])
+  }
+
   function headerDetail(mhz, temp) {
     var parts = []
     var freq = Model.freqText(mhz)
@@ -38,6 +56,23 @@ Column {
 
   width: parent ? parent.width : implicitWidth
   spacing: Style.space(10)
+
+  Card {
+    visible: root.flag("showPowerProfile")
+    foreground: root.foreground
+
+    SectionTitle { text: "Power profile"; fontFamily: root.fontFamily }
+
+    // The panel has its own key handling, so the group takes no Tab focus.
+    ButtonGroup {
+      options: root.powerProfiles
+      value: root.powerProfile
+      focusable: false
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onChanged: function(value) { root.setPowerProfile(value) }
+    }
+  }
 
   Card {
     foreground: root.foreground
