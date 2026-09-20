@@ -187,7 +187,7 @@ Column {
       }
 
       StatRow {
-        label: gpuCard.gpu ? Model.shortGpuName(gpuCard.gpu.name) : "Processor"
+        label: gpuCard.gpu ? Model.gpuFullName(gpuCard.gpu) : "Processor"
         dot: root.s1
         value: gpuCard.gpu && isFinite(Number(gpuCard.gpu.util)) ? String(Math.round(gpuCard.gpu.util)) : "—"
         unit: gpuCard.gpu && isFinite(Number(gpuCard.gpu.util)) ? "%" : ""

@@ -195,10 +195,18 @@ function gpuKindLabel(gpu) {
   return gpu.kind === "integrated" ? "Integrated GPU" : "Discrete GPU"
 }
 
+// The GPU's name with its vendor in front, which lspci's names tend to leave out.
+function gpuFullName(gpu) {
+  if (!gpu) return "GPU"
+  var vendor = { amd: "AMD", nvidia: "NVIDIA", intel: "Intel" }[gpu.vendor] || ""
+  var name = String(gpu.name || vendor || "GPU")
+  return !vendor || name.toLowerCase().indexOf(vendor.toLowerCase()) !== -1 ? name : vendor + " " + name
+}
+
 function gpuOptions(snapshot) {
   var gpus = gpuList(snapshot)
   var out = [{ value: "auto", label: "Auto" }, { value: "all", label: "Every GPU" }]
-  for (var i = 0; i < gpus.length; i++) out.push({ value: gpuKey(gpus[i]), label: shortGpuName(gpus[i].name).slice(0, 28) + (gpus[i].kind ? " · " + gpuKindLabel(gpus[i]).replace(" GPU", "") : "") })
+  for (var i = 0; i < gpus.length; i++) out.push({ value: gpuKey(gpus[i]), label: gpuFullName(gpus[i]).replace(/\s+Graphics$/i, "").slice(0, 28) + (gpus[i].kind ? " · " + gpuKindLabel(gpus[i]).replace(" GPU", "") : "") })
   return out
 }
 
