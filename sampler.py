@@ -630,38 +630,6 @@ class GpuSampler:
             with self.lock:
                 self.latest[bus_id] = snapshot
 
-    PCIE_GENS = {2.5: 1, 5.0: 2, 8.0: 3, 16.0: 4, 32.0: 5, 64.0: 6}
-
-    @classmethod
-    def _pcie_gen(cls, speed: str) -> int | None:
-        """PCIe generation from sysfs' `16.0 GT/s PCIe`."""
-        try:
-            return cls.PCIE_GENS.get(float(speed.split()[0]))
-        except (ValueError, IndexError):
-            return None
-
-    @classmethod
-    def _pcie_link(cls, card: str) -> tuple[int | None, float | None, float | None]:
-        """The narrowest and slowest link between the card and the CPU, which is
-        what an eGPU dock or a x4 slot limits, with the widest the card offers."""
-        gen = width = max_width = None
-        try:
-            path = os.path.realpath(card)
-        except OSError:
-            return None, None, None
-        while path.startswith("/sys/devices/") and path.count("/") > 3:
-            now = read_float(f"{path}/current_link_width")
-            if now:
-                width = now if width is None else min(width, now)
-            most = read_float(f"{path}/max_link_width")
-            if most:
-                max_width = most if max_width is None else max(max_width, most)
-            g = cls._pcie_gen(read_text(f"{path}/current_link_speed"))
-            if g:
-                gen = g if gen is None else min(gen, g)
-            path = os.path.dirname(path)
-        return gen, width, max_width
-
     @staticmethod
     def _hwmon_value(device: dict, prefix: str, labels: tuple[str, ...], exact: bool = False) -> float | None:
         """The channel with one of `labels`, else the first one unless `exact`."""
@@ -751,8 +719,6 @@ class GpuSampler:
                 gpu = self._sample_device(device)
                 if gpu.get("memTotal") is not None:
                     device["memTotal"] = gpu["memTotal"]
-                if not device["integrated"]:
-                    gpu["pcieGen"], gpu["pcieWidth"], gpu["pcieMaxWidth"] = self._pcie_link(device["card"])
                 gpus.append(gpu)
             gpus[-1]["kind"] = "integrated" if device["integrated"] else "discrete"
             gpus[-1]["external"] = device["external"]

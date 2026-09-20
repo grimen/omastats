@@ -81,15 +81,6 @@ fn amd_marketing_name(table: &str, device: &str, revision: &str) -> Option<Strin
     })
 }
 
-/// PCIe generation from sysfs' `16.0 GT/s PCIe`.
-fn pcie_gen(speed: &str) -> Option<u32> {
-    let rate: f64 = speed.split_whitespace().next()?.parse().ok()?;
-    [(2.5, 1), (5.0, 2), (8.0, 3), (16.0, 4), (32.0, 5), (64.0, 6)]
-        .iter()
-        .find(|(gts, _)| (rate - gts).abs() < 0.01)
-        .map(|(_, gen)| *gen)
-}
-
 /// amdgpu hides `mem_busy_percent` on APUs, Intel's integrated GPU sits at
 /// 00:02.0, and everything else is a card of its own.
 fn is_integrated(kind: Kind, slot: &str, has_mem_busy: bool) -> bool {
@@ -374,32 +365,6 @@ impl GpuSampler {
             .or_else(|| Self::hwmon_channel(hwmon, &entries, prefix, "_average", labels, exact))
     }
 
-    /// The narrowest and slowest link between the card and the CPU, which is
-    /// what an eGPU dock or a x4 slot limits, with the widest the card offers.
-    fn pcie_link(card: &str) -> (Option<f64>, Option<f64>, Option<f64>) {
-        let (mut gen, mut width, mut max_width): (Option<u32>, Option<f64>, Option<f64>) =
-            (None, None, None);
-        let mut path = match std::fs::canonicalize(card) {
-            Ok(p) => p,
-            Err(_) => return (None, None, None),
-        };
-        while path.starts_with("/sys/devices/") && path.components().count() > 4 {
-            if let Some(w) = read_f64(path.join("current_link_width")).filter(|w| *w > 0.0) {
-                width = Some(width.map_or(w, |now| now.min(w)));
-            }
-            if let Some(w) = read_f64(path.join("max_link_width")).filter(|w| *w > 0.0) {
-                max_width = Some(max_width.map_or(w, |now| now.max(w)));
-            }
-            if let Some(g) = read_text(path.join("current_link_speed")).and_then(|s| pcie_gen(&s)) {
-                gen = Some(gen.map_or(g, |now| now.min(g)));
-            }
-            if !path.pop() {
-                break;
-            }
-        }
-        (gen.map(f64::from), width, max_width)
-    }
-
     fn hwmon_channel(
         hwmon: &str,
         entries: &[String],
@@ -520,13 +485,6 @@ impl GpuSampler {
                     if let Some(total) = gpu["memTotal"].as_f64() {
                         self.devices[index].mem_total = Some(total);
                     }
-                    let mut gpu = gpu;
-                    if !self.devices[index].integrated {
-                        let (gen, width, max_width) = Self::pcie_link(&self.devices[index].card);
-                        gpu["pcieGen"] = opt_f64(gen);
-                        gpu["pcieWidth"] = opt_f64(width);
-                        gpu["pcieMaxWidth"] = opt_f64(max_width);
-                    }
                     gpus.push(gpu);
                 }
             }
@@ -550,9 +508,7 @@ impl GpuSampler {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        amd_marketing_name, is_integrated, normalize_bus_id, pcie_gen, power_state, Kind, State,
-    };
+    use super::{amd_marketing_name, is_integrated, normalize_bus_id, power_state, Kind, State};
 
     #[test]
     fn bus_ids_normalize_to_the_sysfs_form() {
@@ -578,14 +534,6 @@ mod tests {
         assert!(is_integrated(Kind::Intel, "0000:00:02.0", false));
         assert!(!is_integrated(Kind::Intel, "0000:03:00.0", false));
         assert!(!is_integrated(Kind::Nvidia, "0000:01:00.0", false));
-    }
-
-    #[test]
-    fn link_speeds_map_to_pcie_generations() {
-        assert_eq!(pcie_gen("16.0 GT/s PCIe"), Some(4));
-        assert_eq!(pcie_gen("2.5 GT/s PCIe"), Some(1));
-        assert_eq!(pcie_gen("8.0 GT/s PCIe"), Some(3));
-        assert_eq!(pcie_gen("Unknown"), None);
     }
 
     #[test]
