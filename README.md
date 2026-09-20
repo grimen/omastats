@@ -40,6 +40,10 @@ without elevated privileges. GPU time and
 video memory per process come from the kernel's DRM client statistics, which
 amdgpu, i915 and xe provide and NVIDIA's driver does not.
 
+OmaStats only reads. Changing a GPU's power limit, fan curve or clocks needs
+root, so that is left to a tool made for it: set `tuningCommand` and the GPU
+page links to it.
+
 ## Install
 
 ```bash
@@ -125,6 +129,7 @@ edited there by hand or through Setup → Plugins:
 | `barLabels`               | `text`                                    | `text` stacks the module's letters vertically, `icon` uses glyphs |
 | `disksSource`             | `all`                                     | Disk readout and activity graph: `all` or a device like `nvme0n1` |
 | `gpuSource`               | `auto`                                    | GPU readout: `auto` (most memory), `all` (every GPU in one readout) or a PCI address like `0000:03:00.0` |
+| `tuningCommand`           | *(empty)*                                 | Command behind the GPU page's "Open tuning tool" link, e.g. `lact gui` |
 | `barSensors`              | `cpu`                                     | Sensor readouts: `cpu`, `gpu`, or hwmon ids like `nct6687/fan1` |
 | `temperatureUnit`         | `Celsius`                                 | `Celsius` or `Fahrenheit`                                 |
 | `refreshSeconds`          | `1`                                       | Sampling interval: 0.1, 0.2, 0.5, 1, 2, 5 or 10           |

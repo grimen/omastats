@@ -28,6 +28,7 @@ var SETTINGS = {
   barLabels: "text",
   disksSource: "all",
   gpuSource: "auto",
+  tuningCommand: "",
   barSensors: "cpu",
   temperatureUnit: "Celsius",
   refreshSeconds: 1,
