@@ -27,6 +27,7 @@ var SETTINGS = {
   graphWidth: 36,
   barLabels: "text",
   disksSource: "all",
+  gpuSource: "auto",
   barSensors: "cpu",
   temperatureUnit: "Celsius",
   refreshSeconds: 1,
@@ -165,6 +166,33 @@ function sensorReading(snapshot, id, unit) {
     }
   }
   return null
+}
+
+// ------------------------------------------------------------------- gpus
+
+// Every GPU, the default one first; samplers without `gpus` still report `gpu`.
+function gpuList(snapshot) {
+  var s = snapshot || {}
+  if (Array.isArray(s.gpus)) return s.gpus
+  return s.gpu ? [s.gpu] : []
+}
+
+function gpuKey(gpu) {
+  return String((gpu && (gpu.id || gpu.name)) || "gpu")
+}
+
+// The GPU a readout follows: the chosen PCI address, else the default one.
+function pickGpu(snapshot, source) {
+  var gpus = gpuList(snapshot)
+  for (var i = 0; i < gpus.length; i++) if (gpuKey(gpus[i]) === source) return gpus[i]
+  return gpus.length > 0 ? gpus[0] : null
+}
+
+function gpuOptions(snapshot) {
+  var gpus = gpuList(snapshot)
+  var out = [{ value: "auto", label: "Auto" }]
+  for (var i = 0; i < gpus.length; i++) out.push({ value: gpuKey(gpus[i]), label: shortGpuName(gpus[i].name).slice(0, 28) })
+  return out
 }
 
 // ------------------------------------------------------------------ disks
@@ -482,7 +510,7 @@ function linkSpeedText(iface) {
 
 function emptyHistory() {
   return {
-    cpuUser: [], cpuSystem: [], cpuTotal: [], gpu: [],
+    cpuUser: [], cpuSystem: [], cpuTotal: [], gpu: [], gpus: {},
     memUsed: [], memPressure: [],
     netRx: [], netTx: [], diskRead: [], diskWrite: [], disks: {},
     battery: [], batteryCharging: []

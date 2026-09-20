@@ -50,6 +50,7 @@
       "tabs": "cpu,memory,disks,network,sensors,battery",
       "showProcesses": true,
       "disksSource": "all",
+      "gpuSource": "auto",
       "barSensors": "cpu",
       "barLabels": "text"
     },
@@ -99,6 +100,13 @@
         "label": "Disk readout source",
         "description": "\"all\" or a block device such as nvme0n1.",
         "defaultValue": "all"
+      },
+      {
+        "key": "gpuSource",
+        "type": "string",
+        "label": "GPU readout source",
+        "description": "\"auto\" (the GPU with the most memory) or a GPU's PCI address such as 0000:03:00.0.",
+        "defaultValue": "auto"
       },
       {
         "key": "barSensors",

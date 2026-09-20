@@ -230,7 +230,9 @@ fn main() {
             "errors": [],
         });
         payload["cpu"] = cpu.sample();
-        payload["gpu"] = gpu.sample();
+        let gpus = gpu.sample();
+        payload["gpu"] = gpus.first().cloned().unwrap_or(Value::Null);
+        payload["gpus"] = Value::Array(gpus);
         payload["mem"] = mem::sample_memory();
         payload["disks"] = disks.sample(elapsed, now);
         let mut network = net.sample(elapsed, now, detail > 0);

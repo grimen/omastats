@@ -39,6 +39,7 @@ Panel {
   readonly property string instanceKey: moduleName + ":" + Math.random().toString(36).slice(2, 8)
 
   readonly property string disksSource: String(setting("disksSource", Model.SETTINGS.disksSource) || "all")
+  readonly property string gpuSource: String(setting("gpuSource", Model.SETTINGS.gpuSource) || "auto")
   readonly property string barSensors: String(setting("barSensors", Model.SETTINGS.barSensors) || "cpu")
   readonly property string barLabels: String(setting("barLabels", Model.SETTINGS.barLabels)).toLowerCase() === "icon" ? "icon" : "text"
 
@@ -246,6 +247,7 @@ Panel {
         graphWidth: root.graphWidth
         temperatureUnit: root.temperatureUnit
         disksSource: root.disksSource
+        gpuSource: root.gpuSource
         barSensors: root.barSensors
         labelMode: root.barLabels
         onActivated: function(id, button) {

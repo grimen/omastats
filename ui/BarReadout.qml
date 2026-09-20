@@ -16,6 +16,7 @@ WidgetButton {
   property string temperatureUnit: "Celsius"
   // Disks: "all" or a block device name. Sensors: comma list of sensor ids.
   property string disksSource: "all"
+  property string gpuSource: "auto"
   property string barSensors: "cpu"
   // "text" stacks the module's short name vertically, iStat style; "icon" uses a glyph.
   property string labelMode: "text"
@@ -37,7 +38,7 @@ WidgetButton {
   readonly property real graphHeight: Math.max(8, barSize - Style.space(11))
 
   readonly property var cpu: snap.cpu || ({})
-  readonly property var gpu: snap.gpu || null
+  readonly property var gpu: Model.pickGpu(snap, gpuSource)
   readonly property var mem: snap.mem || ({})
   readonly property var net: snap.net || ({})
   readonly property var disks: snap.disks || ({})
@@ -325,7 +326,7 @@ WidgetButton {
       ceiling: 100
       series: root.module === "cpu"
         ? [root.hist.cpuUser || [], root.hist.cpuSystem || []]
-        : [root.module === "memory" ? (root.hist.memUsed || []) : (root.hist.gpu || [])]
+        : [root.module === "memory" ? (root.hist.memUsed || []) : ((root.gpu && root.hist.gpus ? root.hist.gpus[Model.gpuKey(root.gpu)] : null) || [])]
       colors: [root.s1, root.s2]
       baselineColor: Util.alpha(root.foreground, 0.28)
     }
