@@ -44,6 +44,10 @@ narrow:
 The panel itself, never the sampler, runs `/usr/bin/kill` with a signal and a
 list of numeric pids when the user confirms ending one of their own processes.
 
+The panel itself, never the sampler, runs `/usr/bin/lact cli profile list|get`
+while the GPU page is open and `profile set <name>` when the user picks one of
+the listed LACT profiles; the privileged work stays in LACT's own daemon.
+
 Each helper is passed a fixed argument structure without shell evaluation.
 Missing helpers simply make the corresponding optional field unavailable.
 

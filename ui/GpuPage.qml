@@ -1,5 +1,7 @@
 import QtQuick
+import Quickshell.Io
 import qs.Commons
+import qs.Ui
 import "../Model.js" as Model
 
 Column {
@@ -35,6 +37,60 @@ Column {
   // made for it; this only opens the one the user names.
   readonly property string tuningCommand: String(Model.settingValue(settings, "tuningCommand") || "").trim()
 
+  // GPU power modes are LACT profiles: named bundles of power limit, fan curve,
+  // performance level and clocks that the user defines in LACT. Its daemon does
+  // the privileged writes; `lact cli` reaches it as a member of LACT's admin
+  // group, so nothing here needs root. Read only while the page is open.
+  property var lactProfiles: []
+  property string lactProfile: ""
+  readonly property string lact: "/usr/bin/lact"
+  // Without LACT the first attempt never starts; asking again would only fill the log.
+  property bool lactAsked: false
+  property bool lactStarted: false
+
+  function refreshLactProfiles() {
+    if (embedded || lactList.running || lactSet.running) return
+    if (lactAsked && !lactStarted) return
+    lactAsked = true
+    lactList.running = true
+  }
+
+  function setLactProfile(name) {
+    if (name === lactProfile || lactSet.running || lactProfiles.indexOf(name) === -1) return
+    lactSet.command = [lact, "cli", "profile", "set", String(name)]
+    lactSet.running = true
+  }
+
+  Process {
+    id: lactList
+    command: [root.lact, "cli", "profile", "list"]
+    onStarted: root.lactStarted = true
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.lactProfiles = Model.nameLines(text, 16)
+        if (root.lactProfiles.length > 1) lactGet.running = true
+      }
+    }
+    onExited: function(code) { if (code !== 0) root.lactProfiles = [] }
+  }
+
+  Process {
+    id: lactGet
+    command: [root.lact, "cli", "profile", "get"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.lactProfile = Model.nameLines(text, 1)[0] || ""
+    }
+  }
+
+  Process {
+    id: lactSet
+    onExited: root.refreshLactProfiles()
+  }
+
+  Timer { interval: 10000; running: !root.embedded; repeat: true; triggeredOnStart: true; onTriggered: root.refreshLactProfiles() }
+
   width: parent ? parent.width : implicitWidth
   spacing: Style.space(10)
 
@@ -60,6 +116,23 @@ Column {
         cursorShape: Qt.PointingHandCursor
         onClicked: root.host.bar.run(root.tuningCommand)
       }
+    }
+  }
+
+  Card {
+    visible: !root.embedded && root.lactProfiles.length > 1
+    foreground: root.foreground
+
+    SectionTitle { text: "GPU profile"; fontFamily: root.fontFamily }
+
+    // The panel has its own key handling, so the group takes no Tab focus.
+    ButtonGroup {
+      options: root.lactProfiles
+      value: root.lactProfile
+      focusable: false
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onChanged: function(value) { root.setLactProfile(value) }
     }
   }
 

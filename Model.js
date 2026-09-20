@@ -214,6 +214,18 @@ function gpuFullName(gpu) {
   return !vendor || name.toLowerCase().indexOf(vendor.toLowerCase()) !== -1 ? name : vendor + " " + name
 }
 
+// Names a helper printed one per line, bounded: at most `limit` of them, and
+// none that is empty or implausibly long.
+function nameLines(text, limit) {
+  var out = []
+  var lines = String(text || "").split("\n")
+  for (var i = 0; i < lines.length && out.length < limit; i++) {
+    var name = lines[i].trim()
+    if (name !== "" && name.length <= 64 && out.indexOf(name) === -1) out.push(name)
+  }
+  return out
+}
+
 function gpuOptions(snapshot) {
   var gpus = gpuList(snapshot)
   var out = [{ value: "auto", label: "Auto" }, { value: "all", label: "Every GPU" }]
