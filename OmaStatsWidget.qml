@@ -80,7 +80,7 @@ Panel {
   function styleFor(module) { return Model.moduleStyle(settings, module) }
 
   function showTab(id) {
-    var tab = Model.tabFor(id)
+    var tab = Model.tabFor(id, panelTabs)
     if (panelTabs.indexOf(tab) === -1) tab = panelTabs[0]
     if (currentTab !== tab) {
       currentTab = tab
@@ -90,7 +90,7 @@ Panel {
 
   // Bar click: open on that module; a second click on the same module closes.
   function toggleModule(id) {
-    var tab = Model.tabFor(id)
+    var tab = Model.tabFor(id, panelTabs)
     if (opened && currentTab === tab) { close(); return }
     showTab(tab)
     if (!opened) open()

@@ -327,9 +327,10 @@ function pageFile(tab) {
   return moduleDef(tab).page
 }
 
-// The panel tab that shows a given bar module.
-function tabFor(module) {
-  return module
+// The panel tab that shows a given bar module: the GPU falls back to the
+// CPU page, which carries its cards while the GPU tab is switched off.
+function tabFor(module, tabs) {
+  return module === "gpu" && tabs && tabs.indexOf("gpu") === -1 ? "cpu" : module
 }
 
 function parseModules(raw) {

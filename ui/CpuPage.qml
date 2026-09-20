@@ -159,6 +159,16 @@ Column {
     }
   }
 
+  // The GPU cards live here only while the GPU tab is switched off.
+  GpuPage {
+    visible: Model.parseModules(Model.settingValue(root.settings, "tabs")).indexOf("gpu") === -1
+    service: root.service
+    settings: root.settings
+    temperatureUnit: root.temperatureUnit
+    foreground: root.foreground
+    fontFamily: root.fontFamily
+  }
+
   Card {
     visible: root.flag("showProcesses")
     foreground: root.foreground
