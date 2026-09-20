@@ -36,7 +36,7 @@ var SETTINGS = {
   publicIp: true,
   tabs: "cpu,gpu,memory,disks,network,sensors,battery",
   showProcesses: true,
-  showCores: true, showLoad: true,
+  showCores: true, showLoad: true, showPowerProfile: true,
   showBreakdown: true,
   showVolumes: true, showActivity: true,
   showInterfaces: true, showTotals: true, showAddresses: true,
@@ -48,7 +48,8 @@ var SETTINGS = {
 var PANEL_SECTIONS = {
   cpu: [
     { key: "showCores", label: "Per-core rings" },
-    { key: "showLoad", label: "Load average and uptime" }
+    { key: "showLoad", label: "Load average and uptime" },
+    { key: "showPowerProfile", label: "Power profile switch" }
   ],
   memory: [
     { key: "showBreakdown", label: "Breakdown" }
