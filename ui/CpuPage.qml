@@ -57,6 +57,23 @@ Column {
   spacing: Style.space(10)
 
   Card {
+    visible: root.flag("showPowerProfile")
+    foreground: root.foreground
+
+    SectionTitle { text: "Power profile"; fontFamily: root.fontFamily }
+
+    // The panel has its own key handling, so the group takes no Tab focus.
+    ButtonGroup {
+      options: root.powerProfiles
+      value: root.powerProfile
+      focusable: false
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onChanged: function(value) { root.setPowerProfile(value) }
+    }
+  }
+
+  Card {
     foreground: root.foreground
 
     CardHeader {
@@ -174,23 +191,6 @@ Column {
           font.bold: true
         }
       }
-    }
-  }
-
-  Card {
-    visible: root.flag("showPowerProfile")
-    foreground: root.foreground
-
-    SectionTitle { text: "Power profile"; fontFamily: root.fontFamily }
-
-    // The panel has its own key handling, so the group takes no Tab focus.
-    ButtonGroup {
-      options: root.powerProfiles
-      value: root.powerProfile
-      focusable: false
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      onChanged: function(value) { root.setPowerProfile(value) }
     }
   }
 
