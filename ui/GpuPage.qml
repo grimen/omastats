@@ -31,8 +31,37 @@ Column {
     return !!gpu && gpu[key] !== null && gpu[key] !== undefined && isFinite(Number(gpu[key]))
   }
 
+  // Power limits, fan curves and clocks need root, so they are left to a tool
+  // made for it; this only opens the one the user names.
+  readonly property string tuningCommand: String(Model.settingValue(settings, "tuningCommand") || "").trim()
+
   width: parent ? parent.width : implicitWidth
   spacing: Style.space(10)
+
+  Item {
+    visible: !root.embedded && root.tuningCommand !== "" && !!(root.host && root.host.bar)
+    width: parent.width
+    height: tuneLink.implicitHeight
+
+    Text {
+      id: tuneLink
+      textFormat: Text.PlainText
+      anchors.right: parent.right
+      text: "Open tuning tool ›"
+      color: tuneArea.containsMouse ? Color.accent : root.foreground
+      opacity: tuneArea.containsMouse ? 1 : 0.7
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+
+      MouseArea {
+        id: tuneArea
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: root.host.bar.run(root.tuningCommand)
+      }
+    }
+  }
 
   Repeater {
     // One card per GPU; a count model keeps the cards alive between samples.

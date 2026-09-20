@@ -51,6 +51,7 @@
       "showProcesses": true,
       "disksSource": "all",
       "gpuSource": "auto",
+      "tuningCommand": "",
       "barSensors": "cpu",
       "barLabels": "text"
     },
@@ -107,6 +108,13 @@
         "label": "GPU readout source",
         "description": "\"auto\" (the GPU with the most memory), \"all\" (every GPU in one readout, a colour each) or a GPU's PCI address such as 0000:03:00.0.",
         "defaultValue": "auto"
+      },
+      {
+        "key": "tuningCommand",
+        "type": "string",
+        "label": "GPU tuning tool",
+        "description": "Command the GPU page's \"Open tuning tool\" link runs, such as \"lact gui\" or \"corectrl\". Empty hides the link.",
+        "defaultValue": ""
       },
       {
         "key": "barSensors",
