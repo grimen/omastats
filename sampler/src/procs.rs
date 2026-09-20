@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 const PROC_LIMIT: usize = 6;
 const FULL_LIMIT: usize = 400;
 const CONNECTION_LIMIT: usize = 12;
+const GPU_PROC_LIMIT: usize = 8;
 const PROCESS_SCAN_LIMIT: usize = 16_384;
 const FD_SCAN_LIMIT: usize = 4096;
 const PROC_FILE_LIMIT: u64 = 64 * 1024;
@@ -30,6 +31,55 @@ struct Group {
     count: u32,
 }
 
+/// One DRM client as the kernel describes it in `/proc/<pid>/fdinfo/<fd>`.
+#[derive(Debug, Default, PartialEq)]
+struct DrmClient {
+    pdev: String,
+    client: String,
+    /// Nanoseconds each engine (gfx, compute, dec, enc…) has spent on this client.
+    engines: HashMap<String, u64>,
+    vram: u64,
+}
+
+/// The standard `drm-*` keys, shared by amdgpu, i915 and xe.
+fn parse_drm_fdinfo(text: &str) -> Option<DrmClient> {
+    let mut out = DrmClient::default();
+    let (mut resident, mut total): (Option<u64>, Option<u64>) = (None, None);
+    let size = |value: &str| -> Option<u64> {
+        let mut fields = value.split_whitespace();
+        let number: u64 = fields.next()?.parse().ok()?;
+        Some(number.saturating_mul(match fields.next() {
+            Some("KiB") => 1 << 10,
+            Some("MiB") => 1 << 20,
+            Some("GiB") => 1 << 30,
+            _ => 1,
+        }))
+    };
+    for line in text.lines() {
+        let (key, value) = match line.split_once(':') {
+            Some((key, value)) => (key.trim(), value.trim()),
+            None => continue,
+        };
+        match key {
+            "drm-pdev" => out.pdev = bounded_text(value, EXTERNAL_TEXT_LIMIT),
+            "drm-client-id" => out.client = bounded_text(value, EXTERNAL_TEXT_LIMIT),
+            "drm-resident-vram" => resident = size(value),
+            "drm-memory-vram" | "drm-total-vram" => total = total.or(size(value)),
+            _ => {
+                let engine = match key.strip_prefix("drm-engine-") {
+                    Some(engine) if !engine.starts_with("capacity-") => engine,
+                    _ => continue,
+                };
+                if let Some(ns) = value.split_whitespace().next().and_then(|n| n.parse().ok()) {
+                    out.engines.insert(engine.to_string(), ns);
+                }
+            }
+        }
+    }
+    out.vram = resident.or(total).unwrap_or(0);
+    (!out.pdev.is_empty() && !out.client.is_empty()).then_some(out)
+}
+
 pub struct ProcessSampler {
     prev: HashMap<u32, Prev>,
     threads: f64,
@@ -39,6 +89,8 @@ pub struct ProcessSampler {
     names: HashMap<u32, String>,
     sockets_prev: HashMap<String, (u64, u64)>,
     sockets_time: Option<Instant>,
+    gpu_prev: HashMap<(String, String), HashMap<String, u64>>,
+    gpu_time: Option<Instant>,
 }
 
 /// A readable name for a process: the kernel's 15-character comm, or the
@@ -74,7 +126,120 @@ impl ProcessSampler {
             names: HashMap::new(),
             sockets_prev: HashMap::new(),
             sockets_time: None,
+            gpu_prev: HashMap::new(),
+            gpu_time: None,
         }
+    }
+
+    fn process_name(&self, pid: u32) -> String {
+        if let Some(name) = self.names.get(&pid) {
+            return name.clone();
+        }
+        let stat = read_text(format!("/proc/{pid}/stat")).unwrap_or_default();
+        match (stat.find('('), stat.rfind(')')) {
+            (Some(open), Some(close)) if close > open => display_name(pid, &stat[open + 1..close]),
+            _ => format!("pid {pid}"),
+        }
+    }
+
+    /// GPU time and video memory per process, from the DRM clients behind each
+    /// process's open `/dev/dri` files. Only readable processes are counted,
+    /// and drivers without DRM fdinfo (NVIDIA's) report nothing.
+    pub fn gpu_usage(&mut self) -> Value {
+        let mut clients: HashMap<(String, String), (u32, DrmClient)> = HashMap::new();
+        if let Ok(entries) = fs::read_dir("/proc") {
+            let mut scanned = 0usize;
+            for entry in entries.filter_map(Result::ok) {
+                let pid: u32 = match entry.file_name().to_string_lossy().parse() {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+                scanned += 1;
+                if scanned > PROCESS_SCAN_LIMIT {
+                    break;
+                }
+                let fds = match fs::read_dir(format!("/proc/{pid}/fd")) {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+                for fd in fds.filter_map(Result::ok).take(FD_SCAN_LIMIT) {
+                    let is_drm = fs::read_link(fd.path()).is_ok_and(|t| t.starts_with("/dev/dri/"));
+                    if !is_drm {
+                        continue;
+                    }
+                    let number = fd.file_name().to_string_lossy().to_string();
+                    let client = read_text(format!("/proc/{pid}/fdinfo/{number}"))
+                        .and_then(|text| parse_drm_fdinfo(&text));
+                    if let Some(client) = client {
+                        // A client shared through dup() or fork() counts once.
+                        clients
+                            .entry((client.pdev.clone(), client.client.clone()))
+                            .or_insert((pid, client));
+                    }
+                }
+            }
+        }
+
+        let now = Instant::now();
+        let elapsed = self
+            .gpu_time
+            .map(|t| now.duration_since(t).as_secs_f64())
+            .unwrap_or(0.0);
+        let usable = elapsed > 0.0 && elapsed < 5.0;
+        struct Usage {
+            pid: u32,
+            gpu: f64,
+            vram: u64,
+            /// The GPU holding most of the process's video memory.
+            id: String,
+            most: u64,
+        }
+        let mut usage: HashMap<String, Usage> = HashMap::new();
+        let mut current = HashMap::new();
+        for (key, (pid, client)) in clients {
+            let before = self.gpu_prev.get(&key);
+            // The busiest engine, as `gpu_busy_percent` reports for the whole card.
+            let busiest = client
+                .engines
+                .iter()
+                .filter_map(|(engine, ns)| Some(ns.saturating_sub(*before?.get(engine)?)))
+                .max()
+                .unwrap_or(0);
+            let percent = if usable {
+                (busiest as f64 / (elapsed * 1e9) * 100.0).clamp(0.0, 100.0)
+            } else {
+                0.0
+            };
+            let entry = usage.entry(self.process_name(pid)).or_insert(Usage {
+                pid,
+                gpu: 0.0,
+                vram: 0,
+                id: client.pdev.clone(),
+                most: 0,
+            });
+            entry.gpu = (entry.gpu + percent).min(100.0);
+            entry.vram += client.vram;
+            if client.vram > entry.most {
+                entry.most = client.vram;
+                entry.id = client.pdev.clone();
+            }
+            current.insert(key, client.engines);
+        }
+        self.gpu_prev = current;
+        self.gpu_time = Some(now);
+
+        let mut rows: Vec<(String, Usage)> = usage
+            .into_iter()
+            .filter(|(_, u)| u.gpu > 0.0 || u.vram > 0)
+            .collect();
+        rows.sort_by(|a, b| b.1.gpu.total_cmp(&a.1.gpu).then(b.1.vram.cmp(&a.1.vram)));
+        rows.truncate(GPU_PROC_LIMIT);
+        json!(rows
+            .into_iter()
+            .map(|(name, u)| json!({
+                "name": name, "pid": u.pid, "gpu": round1(u.gpu), "vram": u.vram, "id": u.id,
+            }))
+            .collect::<Vec<_>>())
     }
 
     pub fn reset(&mut self) {
@@ -472,5 +637,25 @@ fn cgroup_label(cgroup: &str) -> String {
         "other".to_string()
     } else {
         bounded_text(stem, EXTERNAL_TEXT_LIMIT)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_drm_fdinfo;
+
+    #[test]
+    fn drm_fdinfo_yields_engines_and_video_memory() {
+        let text = "pos:\t0\nflags:\t02100002\ndrm-driver:\tamdgpu\ndrm-client-id:\t8\n\
+            drm-pdev:\t0000:03:00.0\ndrm-total-vram:\t12 KiB\ndrm-resident-vram:\t3 MiB\n\
+            drm-engine-gfx:\t1500 ns\ndrm-engine-dec:\t20 ns\ndrm-engine-capacity-gfx:\t1\n";
+        let client = parse_drm_fdinfo(text).expect("a DRM client");
+        assert_eq!(client.pdev, "0000:03:00.0");
+        assert_eq!(client.client, "8");
+        assert_eq!(client.vram, 3 << 20);
+        assert_eq!(client.engines.get("gfx"), Some(&1500));
+        assert_eq!(client.engines.get("dec"), Some(&20));
+        assert_eq!(client.engines.len(), 2);
+        assert_eq!(parse_drm_fdinfo("pos:\t0\nflags:\t02\n"), None);
     }
 }
