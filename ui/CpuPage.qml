@@ -136,11 +136,10 @@ Column {
   }
 
   Card {
-    visible: root.flag("showLoad") || root.flag("showPowerProfile")
+    visible: root.flag("showLoad")
     foreground: root.foreground
 
     Row {
-      visible: root.flag("showLoad")
       width: parent.width
 
       Column {
@@ -176,13 +175,19 @@ Column {
         }
       }
     }
+  }
 
-    Dropdown {
-      visible: root.flag("showPowerProfile")
-      width: parent.width
-      label: "Power profile"
+  Card {
+    visible: root.flag("showPowerProfile")
+    foreground: root.foreground
+
+    SectionTitle { text: "Power profile"; fontFamily: root.fontFamily }
+
+    // The panel has its own key handling, so the group takes no Tab focus.
+    ButtonGroup {
       options: root.powerProfiles
       value: root.powerProfile
+      focusable: false
       foreground: root.foreground
       fontFamily: root.fontFamily
       onChanged: function(value) { root.setPowerProfile(value) }

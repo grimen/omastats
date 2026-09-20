@@ -49,7 +49,7 @@ var PANEL_SECTIONS = {
   cpu: [
     { key: "showCores", label: "Per-core rings" },
     { key: "showLoad", label: "Load average and uptime" },
-    { key: "showPowerProfile", label: "Power profile switch" }
+    { key: "showPowerProfile", label: "Power profile" }
   ],
   memory: [
     { key: "showBreakdown", label: "Breakdown" }
