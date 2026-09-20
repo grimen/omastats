@@ -124,7 +124,7 @@ edited there by hand or through Setup → Plugins:
 | `modules`                 | `cpu,memory,network`                      | Bar readouts, in order: `cpu gpu memory disks network sensors battery` |
 | `style`                   | `both`                                    | Default look of a readout: `graph`, `ring`, `text`, `both` (graph and figure), or `ring-text` |
 | `cpuStyle` … `batteryStyle` | *(inherit)*                             | Per-module override of `style`                            |
-| `tabs`                    | `cpu,gpu,memory,disks,network,sensors,battery` | Tabs shown in the panel                              |
+| `tabs`                    | `cpu,gpu,memory,disks,network,sensors,battery` | Tabs shown in the panel, ordered like the bar readouts |
 | `graphWidth`              | `36`                                      | Width of each mini graph in the bar                       |
 | `barLabels`               | `text`                                    | `text` stacks the module's letters vertically, `icon` uses glyphs |
 | `disksSource`             | `all`                                     | Disk readout and activity graph: `all` or a device like `nvme0n1` |

@@ -354,7 +354,9 @@ function parseModules(raw) {
 
 // Module tabs in canonical order, filtered by the "tabs" setting and by the
 // hardware present. Never empty: the CPU tab is the floor.
-function panelTabs(hasBattery, tabsSetting, hasGpu) {
+// Tabs follow the order of the bar readouts, so the strip reads like the bar;
+// tabs without a readout come after, in their usual order.
+function panelTabs(hasBattery, tabsSetting, hasGpu, barModules) {
   var wanted = parseModules(tabsSetting === undefined ? SETTINGS.tabs : tabsSetting)
   var out = []
   for (var i = 0; i < PANEL_TABS.length; i++) {
@@ -364,6 +366,9 @@ function panelTabs(hasBattery, tabsSetting, hasGpu) {
     if (wanted.indexOf(id) === -1) continue
     out.push(id)
   }
+  var bar = Array.isArray(barModules) ? barModules : []
+  var rank = function(id) { var at = bar.indexOf(id); return at === -1 ? bar.length + PANEL_TABS.indexOf(id) : at }
+  out.sort(function(a, b) { return rank(a) - rank(b) })
   return out.length > 0 ? out : ["cpu"]
 }
 
