@@ -427,36 +427,86 @@ class GpuSampler:
         "power.draw,clocks.gr,clocks.max.gr,fan.speed,pci.bus_id"
     )
     LIMIT = 8
+    RESCAN = 5.0
     VENDORS = {"0x1002": "amd", "0x8086": "intel", "0x10de": "nvidia"}
+    FALLBACK_NAMES = {"amd": "AMD", "intel": "Intel", "nvidia": "NVIDIA"}
 
     def __init__(self) -> None:
         self.devices: list[dict] = []
+        # PCI slots of every DRM card at the last scan; a change means hotplug.
+        self.signature: list[str] = []
+        self.last_scan: float | None = None
         self.latest: dict[str, dict] = {}
         self.lock = threading.Lock()
         self.proc: subprocess.Popen | None = None
-        self._detect()
+        self._refresh()
 
-    def _detect(self) -> None:
+    @staticmethod
+    def _cards() -> list[tuple[str, str]]:
+        """Every `cardN` device directory with its PCI slot."""
         drm = "/sys/class/drm"
+        out = []
         for card in list_dir(drm):
-            if not re.fullmatch(r"card\d+", card) or len(self.devices) >= self.LIMIT:
-                continue
-            device = f"{drm}/{card}/device"
+            if re.fullmatch(r"card\d+", card):
+                device = f"{drm}/{card}/device"
+                try:
+                    slot = os.path.basename(os.path.realpath(device))
+                except OSError:
+                    slot = ""
+                out.append((device, slot))
+        return out
+
+    @staticmethod
+    def _power_state(runtime_status: str) -> str:
+        return "asleep" if runtime_status == "suspended" else "active"
+
+    def _state(self, device: dict) -> str:
+        """Hot-unplugged cards are dropped, runtime-suspended ones are reported
+        without touching their sensors. Reads PCI and PM core attributes only,
+        which never wake the device."""
+        if not os.path.exists(f"{device['card']}/vendor"):
+            return "gone"
+        return self._power_state(read_text(f"{device['card']}/power/runtime_status"))
+
+    def _refresh(self) -> None:
+        """Detects again when the set of cards changed: an eGPU came or went."""
+        now = time.monotonic()
+        if self.last_scan is not None and now - self.last_scan < self.RESCAN:
+            return
+        self.last_scan = now
+        cards = self._cards()
+        signature = sorted(slot for _, slot in cards)
+        if signature != self.signature or any(self._state(d) == "gone" for d in self.devices):
+            self.signature = signature
+            self._detect(cards)
+
+    def _detect(self, cards: list[tuple[str, str]]) -> None:
+        previous = self.devices
+        had_nvidia = any(d["kind"] == "nvidia" for d in previous)
+        self.devices = []
+        for device, slot in cards:
+            if len(self.devices) >= self.LIMIT:
+                break
             kind = self.VENDORS.get(read_text(f"{device}/vendor").lower())
             if kind is None:
                 continue
-            try:
-                slot = os.path.basename(os.path.realpath(device))
-            except OSError:
-                slot = ""
             hwmon = None
             for hw in list_dir(f"{device}/hwmon"):
                 hwmon = f"{device}/hwmon/{hw}"
                 break
-            self.devices.append({"kind": kind, "card": device, "hwmon": hwmon, "name": self._pci_name(slot), "id": slot})
-        if any(d["kind"] == "nvidia" for d in self.devices):
-            if not (command_path("nvidia-smi") and self._start_nvidia()):
-                self.devices = [d for d in self.devices if d["kind"] != "nvidia"]
+            mem_total = next((d["memTotal"] for d in previous if d["id"] == slot), None)
+            self.devices.append({
+                "kind": kind, "card": device, "hwmon": hwmon, "id": slot, "memTotal": mem_total,
+                "name": self._pci_name(slot) or self.FALLBACK_NAMES[kind],
+            })
+        # nvidia-smi enumerates its GPUs when it starts, so it restarts with them.
+        nvidia = any(d["kind"] == "nvidia" for d in self.devices)
+        if had_nvidia or nvidia:
+            self.stop()
+            with self.lock:
+                self.latest.clear()
+        if nvidia and not (command_path("nvidia-smi") and self._start_nvidia()):
+            self.devices = [d for d in self.devices if d["kind"] != "nvidia"]
 
     @staticmethod
     def _normalize_bus_id(value: str) -> str:
@@ -550,7 +600,7 @@ class GpuSampler:
         if kind == "nvidia":
             with self.lock:
                 latest = self.latest.get(device["id"])
-                return dict(latest) if latest else {"id": device["id"], "name": device["name"] or "NVIDIA", "vendor": "nvidia", "util": None}
+                return dict(latest) if latest else {"id": device["id"], "name": device["name"], "vendor": kind, "util": None}
         util = read_float(f"{card}/gpu_busy_percent")
         mem_used = read_float(f"{card}/mem_info_vram_used")
         mem_total = read_float(f"{card}/mem_info_vram_total")
@@ -570,7 +620,7 @@ class GpuSampler:
             max_mhz = gt_max
         return {
             "id": device["id"],
-            "name": device["name"] or ("AMD" if kind == "amd" else "Intel"),
+            "name": device["name"],
             "vendor": kind,
             "util": util,
             "memUsed": mem_used,
@@ -584,7 +634,22 @@ class GpuSampler:
 
     def sample(self) -> list[dict]:
         """Every GPU, the one with the most memory first: that one is the default readout."""
-        gpus = [self._sample_device(device) for device in self.devices]
+        self._refresh()
+        gpus = []
+        for device in self.devices:
+            state = self._state(device)
+            if state == "gone":
+                self.last_scan = None
+            elif state == "asleep":
+                gpus.append({
+                    "id": device["id"], "name": device["name"], "vendor": device["kind"],
+                    "util": None, "memTotal": device["memTotal"], "asleep": True,
+                })
+            else:
+                gpu = self._sample_device(device)
+                if gpu.get("memTotal") is not None:
+                    device["memTotal"] = gpu["memTotal"]
+                gpus.append(gpu)
         gpus.sort(key=lambda g: -(g.get("memTotal") or 0))
         return gpus
 
