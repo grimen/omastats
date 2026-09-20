@@ -28,7 +28,7 @@ OmaStats is an independent project and is not affiliated with Bjango.
 Battery and GPU only appear when the hardware exists. With several GPUs the
 bar readout follows the one with the most memory unless a **Source** is picked
 in Settings; **Every GPU** draws them all in the one readout, a colour each, with the
-busiest GPU's figure. GPUs are labelled integrated,
+busiest GPU's figure. GPUs are numbered by memory size, largest first, so GPU 1 is the default, and labelled integrated,
 discrete or external; external means behind a port the kernel marks removable
 (Thunderbolt/USB4), so an OCuLink or riser-attached card counts as discrete. GPUs are detected again within a few seconds of an eGPU being
 plugged in or removed, and a runtime-suspended GPU is shown as asleep rather

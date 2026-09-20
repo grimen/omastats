@@ -165,11 +165,11 @@ WidgetButton {
         if (gpus.length > 1) {
           for (var g = 0; g < gpus.length; g++) {
             var one = gpus[g]
-            parts.push(Model.gpuKindLabel(one) + " · " + Model.gpuFullName(one) + " " + (one.asleep ? "asleep" : isFinite(Number(one.util)) && one.util !== null ? Model.percentText(one.util) : "—"))
+            parts.push(Model.gpuKindLabel(one, g + 1) + " · " + Model.gpuFullName(one) + " " + (one.asleep ? "asleep" : isFinite(Number(one.util)) && one.util !== null ? Model.percentText(one.util) : "—"))
           }
           return parts.join("\n")
         }
-        parts.push(Model.gpuKindLabel(gpu))
+        parts.push(Model.gpuKindLabel(gpu, Model.gpuNumber(snap, gpu)))
         parts.push(Model.gpuFullName(gpu) + " " + (gpu.asleep ? "asleep" : isFinite(Number(gpu.util)) ? Model.percentText(gpu.util) : ""))
         if (Model.freqText(gpu.mhz)) parts.push(Model.freqText(gpu.mhz))
         if (isFinite(Number(gpu.temp))) parts.push(Model.tempLongText(gpu.temp, temperatureUnit))

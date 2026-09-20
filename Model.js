@@ -188,11 +188,21 @@ function pickGpu(snapshot, source) {
   return gpus.length > 0 ? gpus[0] : null
 }
 
-// "Integrated GPU", "Discrete GPU" or "External GPU" (Thunderbolt/USB4).
-function gpuKindLabel(gpu) {
-  if (!gpu || !gpu.kind) return "GPU"
-  if (gpu.external) return "External GPU"
-  return gpu.kind === "integrated" ? "Integrated GPU" : "Discrete GPU"
+// Several GPUs are numbered in list order, so GPU 1 is the default readout
+// and the first colour of the bar graph; a lone GPU needs no number (0).
+function gpuNumber(snapshot, gpu) {
+  var gpus = gpuList(snapshot)
+  if (gpus.length < 2) return 0
+  for (var i = 0; i < gpus.length; i++) if (gpuKey(gpus[i]) === gpuKey(gpu)) return i + 1
+  return 0
+}
+
+// "Integrated GPU", "Discrete GPU" or "External GPU" (Thunderbolt/USB4); with
+// a number, "GPU 1 · Discrete".
+function gpuKindLabel(gpu, number) {
+  var kind = !gpu || !gpu.kind ? "" : gpu.external ? "External" : gpu.kind === "integrated" ? "Integrated" : "Discrete"
+  if (number > 0) return "GPU " + number + (kind ? " · " + kind : "")
+  return kind ? kind + " GPU" : "GPU"
 }
 
 // The GPU's name with its vendor in front, which lspci's names tend to leave out.
@@ -206,7 +216,7 @@ function gpuFullName(gpu) {
 function gpuOptions(snapshot) {
   var gpus = gpuList(snapshot)
   var out = [{ value: "auto", label: "Auto" }, { value: "all", label: "Every GPU" }]
-  for (var i = 0; i < gpus.length; i++) out.push({ value: gpuKey(gpus[i]), label: gpuFullName(gpus[i]).replace(/\s+Graphics$/i, "").slice(0, 28) + (gpus[i].kind ? " · " + gpuKindLabel(gpus[i]).replace(" GPU", "") : "") })
+  for (var i = 0; i < gpus.length; i++) out.push({ value: gpuKey(gpus[i]), label: (gpus.length > 1 ? (i + 1) + " · " : "") + gpuFullName(gpus[i]).replace(/\s+Graphics$/i, "").slice(0, 28) + (gpus[i].kind ? " · " + gpuKindLabel(gpus[i]).replace(" GPU", "") : "") })
   return out
 }
 
