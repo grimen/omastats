@@ -50,7 +50,7 @@ Column {
 
       CardHeader {
         title: Model.gpuKindLabel(gpuCard.gpu)
-        detail: !gpuCard.gpu ? "" : Model.shortGpuName(gpuCard.gpu.name) + (gpuCard.gpu.asleep ? ", asleep" : "")
+        detail: !gpuCard.gpu ? "" : Model.gpuFullName(gpuCard.gpu) + (gpuCard.gpu.asleep ? ", asleep" : "")
         foreground: root.foreground
         fontFamily: root.fontFamily
       }
