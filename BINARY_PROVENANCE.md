@@ -40,6 +40,9 @@ narrow:
 - `curl` to one of the three fixed IP-only HTTPS endpoints documented in the
   README, solely when public-IP display is enabled.
 
+The panel itself, never the sampler, runs `/usr/bin/kill` with a signal and a
+list of numeric pids when the user confirms ending one of their own processes.
+
 Each helper is passed a fixed argument structure without shell evaluation.
 Missing helpers simply make the corresponding optional field unavailable.
 
