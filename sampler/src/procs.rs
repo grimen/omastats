@@ -209,6 +209,8 @@ impl ProcessSampler {
             /// The GPU holding most of the process's video memory.
             id: String,
             most: u64,
+            /// fdinfo is only readable for the user's own processes, so these are endable.
+            pids: Vec<u32>,
         }
         let mut usage: HashMap<String, Usage> = HashMap::new();
         let mut current = HashMap::new();
@@ -232,7 +234,11 @@ impl ProcessSampler {
                 vram: 0,
                 id: client.pdev.clone(),
                 most: 0,
+                pids: Vec::new(),
             });
+            if !entry.pids.contains(&pid) {
+                entry.pids.push(pid);
+            }
             entry.gpu = (entry.gpu + percent).min(100.0);
             entry.vram += client.vram;
             if client.vram > entry.most {
@@ -254,6 +260,8 @@ impl ProcessSampler {
             .into_iter()
             .map(|(name, u)| json!({
                 "name": name, "pid": u.pid, "gpu": round1(u.gpu), "vram": u.vram, "id": u.id,
+                "count": u.pids.len(),
+                "pids": if u.pids.len() <= END_PID_LIMIT { u.pids } else { Vec::new() },
             }))
             .collect::<Vec<_>>())
     }

@@ -1574,7 +1574,9 @@ class ProcessSampler:
             # The busiest engine, as `gpu_busy_percent` reports for the whole card.
             deltas = [max(0, ns - before[engine]) for engine, ns in client["engines"].items() if before and engine in before]
             percent = min(100.0, max(0.0, max(deltas, default=0) / (elapsed * 1e9) * 100)) if usable else 0.0
-            row = usage.setdefault(self._process_name(pid), {"pid": pid, "gpu": 0.0, "vram": 0, "id": client["pdev"], "most": 0})
+            row = usage.setdefault(self._process_name(pid), {"pid": pid, "gpu": 0.0, "vram": 0, "id": client["pdev"], "most": 0, "pids": []})
+            if pid not in row["pids"]:  # fdinfo is only readable for our own processes, so these are endable
+                row["pids"].append(pid)
             row["gpu"] = min(100.0, row["gpu"] + percent)
             row["vram"] += client["vram"]
             if client["vram"] > row["most"]:  # the GPU holding most of its video memory
@@ -1586,7 +1588,8 @@ class ProcessSampler:
         rows = [(name, row) for name, row in usage.items() if row["gpu"] > 0 or row["vram"] > 0]
         rows.sort(key=lambda item: (-item[1]["gpu"], -item[1]["vram"]))
         return [
-            {"name": name, "pid": row["pid"], "gpu": round(row["gpu"], 1), "vram": row["vram"], "id": row["id"]}
+            {"name": name, "pid": row["pid"], "gpu": round(row["gpu"], 1), "vram": row["vram"], "id": row["id"],
+             "count": len(row["pids"]), "pids": row["pids"] if len(row["pids"]) <= END_PID_LIMIT else []}
             for name, row in rows[:GPU_PROC_LIMIT]
         ]
 
