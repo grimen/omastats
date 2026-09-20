@@ -161,6 +161,7 @@ Column {
 
   // The GPU cards live here only while the GPU tab is switched off.
   GpuPage {
+    embedded: true
     visible: Model.parseModules(Model.settingValue(root.settings, "tabs")).indexOf("gpu") === -1
     service: root.service
     settings: root.settings

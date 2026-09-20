@@ -18,7 +18,7 @@ OmaStats is an independent project and is not affiliated with Bjango.
 | Module  | Bar readout                         | Panel                                                                 |
 |---------|-------------------------------------|-----------------------------------------------------------------------|
 | CPU     | glyph · user/system history · %     | User/system history, per-core rings, load, uptime, top processes      |
-| GPU     | glyph · utilisation history · %     | One card per GPU: usage history, memory, power (NVIDIA via `nvidia-smi`, AMD/Intel via sysfs) |
+| GPU     | glyph · utilisation history · %     | One card per GPU: usage, memory and temperature rings, history, engine load, power against its limit, clocks, fan, PCIe link; GPU time and memory per process |
 | Memory  | glyph · used history · %            | Swap and memory rings, breakdown, processes                           |
 | Disks   | glyph · read/write history · rates  | Volumes (click to open in Files), activity for all disks or one, processes |
 | Network | glyph · up/down history · rates     | Upload/download, interfaces, public and local IPs, traffic per process |
@@ -33,6 +33,13 @@ discrete or external; external means behind a port the kernel marks removable
 (Thunderbolt/USB4), so an OCuLink or riser-attached card counts as discrete. GPUs are detected again within a few seconds of an eGPU being
 plugged in or removed, and a runtime-suspended GPU is shown as asleep rather
 than polled, so monitoring never wakes it.
+
+The GPU page shows whatever each driver publishes and leaves the rest out: AMD
+reports the most through sysfs, NVIDIA through `nvidia-smi`, Intel little
+without elevated privileges. The PCIe figure is the narrowest link between the
+card and the CPU, so a card in an eGPU dock reads "x4 of x16". GPU time and
+video memory per process come from the kernel's DRM client statistics, which
+amdgpu, i915 and xe provide and NVIDIA's driver does not.
 
 ## Install
 

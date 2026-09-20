@@ -212,6 +212,14 @@ function gpuFullName(gpu) {
   return !vendor || name.toLowerCase().indexOf(vendor.toLowerCase()) !== -1 ? name : vendor + " " + name
 }
 
+// "PCIe 4.0 x4", with " of x16" when the link is narrower than the card: the
+// mark of an eGPU dock or a short slot.
+function pcieText(gpu) {
+  if (!gpu || !(gpu.pcieWidth > 0)) return ""
+  var text = "PCIe " + (gpu.pcieGen > 0 ? gpu.pcieGen + ".0 " : "") + "x" + gpu.pcieWidth
+  return gpu.pcieMaxWidth > gpu.pcieWidth ? text + " of x" + gpu.pcieMaxWidth : text
+}
+
 function gpuOptions(snapshot) {
   var gpus = gpuList(snapshot)
   var out = [{ value: "auto", label: "Auto" }, { value: "all", label: "Every GPU" }]

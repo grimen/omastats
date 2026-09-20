@@ -12,17 +12,30 @@ Column {
   property bool publicIpEnabled: true
   property color foreground: Color.popups.text
   property string fontFamily: Style.font.family
+  // Shown inside the CPU page while the GPU tab is off: no process list there,
+  // because the sampler only gathers GPU processes for the GPU tab.
+  property bool embedded: false
+
+  function flag(key) { return Model.flag(settings, key) }
 
   readonly property var snap: service ? service.snapshot : ({})
   readonly property var hist: service ? service.history : Model.emptyHistory()
   readonly property color s1: service ? service.series1 : Color.accent
+  readonly property color s2: service ? service.series2 : Color.accent
+  readonly property color warn: service ? service.warn : Color.urgent
+  readonly property color danger: service ? service.danger : Color.urgent
+  readonly property var gpuProcs: snap.gpuProcs
 
-  function headerDetail(mhz, temp) {
-    var parts = []
-    var freq = Model.freqText(mhz)
-    if (freq) parts.push(freq)
-    if (isFinite(Number(temp)) && temp !== null) parts.push(Model.tempText(temp, temperatureUnit))
-    return parts.join(", ")
+  // Drivers leave out what they cannot measure, so every figure is optional.
+  function has(gpu, key) {
+    return !!gpu && gpu[key] !== null && gpu[key] !== undefined && isFinite(Number(gpu[key]))
+  }
+
+  function tempColor(celsius, max) {
+    var frac = Model.num(celsius) / max
+    if (frac >= 0.92) return danger
+    if (frac >= 0.78) return warn
+    return s1
   }
 
   width: parent ? parent.width : implicitWidth
@@ -36,13 +49,72 @@ Column {
       id: gpuCard
       required property int index
       readonly property var gpu: Model.gpuList(root.snap)[index] || null
+      readonly property real memPercent: gpu && gpu.memTotal > 0 ? gpu.memUsed / gpu.memTotal * 100 : 0
+      // The hotspot is what the card throttles on; the edge sensor reads cooler.
+      readonly property string tempKey: root.has(gpu, "tempJunction") ? "tempJunction" : "temp"
       foreground: root.foreground
 
       CardHeader {
         title: Model.gpuKindLabel(gpuCard.gpu)
-        detail: !gpuCard.gpu ? "" : gpuCard.gpu.asleep ? "Asleep" : root.headerDetail(gpuCard.gpu.mhz, gpuCard.gpu.temp)
+        detail: !gpuCard.gpu ? "" : gpuCard.gpu.asleep
+          ? Model.shortGpuName(gpuCard.gpu.name) + ", asleep"
+          : [Model.shortGpuName(gpuCard.gpu.name), Model.pcieText(gpuCard.gpu)].filter(function(part) { return part }).join(", ")
         foreground: root.foreground
         fontFamily: root.fontFamily
+      }
+
+      Item {
+        visible: !!gpuCard.gpu && !gpuCard.gpu.asleep
+        width: parent.width
+        height: rings.implicitHeight
+
+        Row {
+          id: rings
+          anchors.horizontalCenter: parent.horizontalCenter
+          spacing: Style.space(18)
+
+          RingGauge {
+            visible: root.has(gpuCard.gpu, "util")
+            value: visible ? gpuCard.gpu.util / 100 : 0
+            color: root.s1
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            topText: "Usage"
+            valueText: visible ? String(Math.round(gpuCard.gpu.util)) : ""
+            unitText: "%"
+            subText: gpuCard.gpu ? Model.freqText(gpuCard.gpu.mhz) : ""
+            valueSize: Style.font.heading
+            size: Style.space(84)
+          }
+
+          RingGauge {
+            visible: !!(gpuCard.gpu && gpuCard.gpu.memTotal > 0)
+            value: gpuCard.memPercent / 100
+            color: root.s2
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            topText: "Memory"
+            valueText: String(Math.round(gpuCard.memPercent))
+            unitText: "%"
+            subText: visible ? Model.bytesText(gpuCard.gpu.memUsed) : ""
+            valueSize: Style.font.heading
+            size: Style.space(84)
+          }
+
+          RingGauge {
+            visible: root.has(gpuCard.gpu, gpuCard.tempKey)
+            value: visible ? Math.max(0, Math.min(1, gpuCard.gpu[gpuCard.tempKey] / 110)) : 0
+            color: visible ? root.tempColor(gpuCard.gpu[gpuCard.tempKey], 110) : root.s1
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            topText: "Temp"
+            valueText: visible ? Model.tempParts(gpuCard.gpu[gpuCard.tempKey], root.temperatureUnit).value : ""
+            unitText: "°"
+            subText: gpuCard.tempKey === "tempJunction" ? "hotspot" : ""
+            valueSize: Style.font.heading
+            size: Style.space(84)
+          }
+        }
       }
 
       HistoryGraph {
@@ -55,32 +127,94 @@ Column {
       }
 
       StatRow {
-        label: gpuCard.gpu ? Model.shortGpuName(gpuCard.gpu.name) : "Processor"
-        dot: root.s1
-        value: gpuCard.gpu && isFinite(Number(gpuCard.gpu.util)) ? String(Math.round(gpuCard.gpu.util)) : "—"
-        unit: gpuCard.gpu && isFinite(Number(gpuCard.gpu.util)) ? "%" : ""
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-      }
-
-      StatRow {
         visible: !!(gpuCard.gpu && gpuCard.gpu.memTotal > 0)
         label: "Memory"
-        detail: gpuCard.gpu && gpuCard.gpu.memTotal > 0 ? Model.percentText(gpuCard.gpu.memUsed / gpuCard.gpu.memTotal * 100) : ""
-        value: gpuCard.gpu ? Model.pairText(gpuCard.gpu.memUsed, gpuCard.gpu.memTotal).replace(/ [A-Z]+$/, "") : ""
-        unit: gpuCard.gpu ? Model.bytesParts(gpuCard.gpu.memTotal).unit : ""
+        detail: visible ? Model.percentText(gpuCard.memPercent) : ""
+        value: visible ? Model.pairText(gpuCard.gpu.memUsed, gpuCard.gpu.memTotal).replace(/ [A-Z]+$/, "") : ""
+        unit: visible ? Model.bytesParts(gpuCard.gpu.memTotal).unit : ""
         foreground: root.foreground
         fontFamily: root.fontFamily
       }
 
       StatRow {
-        visible: !!(gpuCard.gpu && isFinite(Number(gpuCard.gpu.power)) && gpuCard.gpu.power !== null)
+        visible: root.has(gpuCard.gpu, "memBusy")
+        label: "Memory controller"
+        value: visible ? String(Math.round(gpuCard.gpu.memBusy)) : ""
+        unit: "%"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+      }
+
+      StatRow {
+        visible: root.has(gpuCard.gpu, "vcnBusy")
+        label: "Video engine"
+        value: visible ? String(Math.round(gpuCard.gpu.vcnBusy)) : ""
+        unit: "%"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+      }
+
+      StatRow {
+        visible: root.has(gpuCard.gpu, "power")
         label: "Power"
-        value: gpuCard.gpu && gpuCard.gpu.power !== null ? String(Math.round(gpuCard.gpu.power)) : ""
+        detail: root.has(gpuCard.gpu, "powerCap") ? "of " + Math.round(gpuCard.gpu.powerCap) + " W" : ""
+        value: visible ? String(Math.round(gpuCard.gpu.power)) : ""
         unit: "W"
         foreground: root.foreground
         fontFamily: root.fontFamily
       }
+
+      StatRow {
+        visible: root.has(gpuCard.gpu, "memMhz")
+        label: "Memory clock"
+        value: visible ? String(Math.round(gpuCard.gpu.memMhz)) : ""
+        unit: "MHz"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+      }
+
+      StatRow {
+        visible: root.has(gpuCard.gpu, "tempMem")
+        label: "Memory temperature"
+        value: visible ? Model.tempParts(gpuCard.gpu.tempMem, root.temperatureUnit).value : ""
+        unit: "°"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+      }
+
+      StatRow {
+        // sysfs gives a speed, nvidia-smi only a duty cycle.
+        readonly property bool rpm: root.has(gpuCard.gpu, "fanRpm")
+        visible: rpm || root.has(gpuCard.gpu, "fan")
+        label: "Fan"
+        detail: rpm && gpuCard.gpu.fanRpm > 0 && gpuCard.gpu.fanMax > 0 ? Model.percentText(gpuCard.gpu.fanRpm / gpuCard.gpu.fanMax * 100) : ""
+        value: !visible ? "" : !rpm ? String(Math.round(gpuCard.gpu.fan)) : gpuCard.gpu.fanRpm > 0 ? String(Math.round(gpuCard.gpu.fanRpm)) : "Stopped"
+        unit: !visible ? "" : !rpm ? "%" : gpuCard.gpu.fanRpm > 0 ? "rpm" : ""
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+      }
+    }
+  }
+
+  Card {
+    visible: !root.embedded && root.flag("showProcesses")
+    foreground: root.foreground
+
+    ProcessList {
+      host: root.host
+      expandable: false
+      caption: "GPU time and video memory per process, from the kernel's DRM client statistics. NVIDIA's driver does not publish them."
+      items: Array.isArray(root.gpuProcs) ? root.gpuProcs : []
+      total: items.length
+      sortKey: "gpu"
+      columns: [
+        { key: "gpu", kind: "percent", title: "GPU" },
+        { key: "vram", kind: "bytes", title: "Memory" }
+      ]
+      columnWidth: Style.space(70)
+      emptyText: Array.isArray(root.gpuProcs) ? "No GPU clients" : "Measuring…"
+      foreground: root.foreground
+      fontFamily: root.fontFamily
     }
   }
 }
