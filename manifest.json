@@ -105,7 +105,7 @@
         "key": "gpuSource",
         "type": "string",
         "label": "GPU readout source",
-        "description": "\"auto\" (the GPU with the most memory) or a GPU's PCI address such as 0000:03:00.0.",
+        "description": "\"auto\" (the GPU with the most memory), \"all\" (every GPU in one readout, a colour each) or a GPU's PCI address such as 0000:03:00.0.",
         "defaultValue": "auto"
       },
       {

@@ -188,8 +188,8 @@ function pickGpu(snapshot, source) {
   return gpus.length > 0 ? gpus[0] : null
 }
 
-// Several GPUs are numbered in list order, so GPU 1 is the default readout;
-// a lone GPU needs no number (0).
+// Several GPUs are numbered in list order, so GPU 1 is the default readout
+// and the first colour of the bar graph; a lone GPU needs no number (0).
 function gpuNumber(snapshot, gpu) {
   var gpus = gpuList(snapshot)
   if (gpus.length < 2) return 0
@@ -215,7 +215,7 @@ function gpuFullName(gpu) {
 
 function gpuOptions(snapshot) {
   var gpus = gpuList(snapshot)
-  var out = [{ value: "auto", label: "Auto" }]
+  var out = [{ value: "auto", label: "Auto" }, { value: "all", label: "Every GPU" }]
   for (var i = 0; i < gpus.length; i++) out.push({ value: gpuKey(gpus[i]), label: (gpus.length > 1 ? (i + 1) + " · " : "") + gpuFullName(gpus[i]).replace(/\s+Graphics$/i, "").slice(0, 28) + (gpus[i].kind ? " · " + gpuKindLabel(gpus[i]).replace(" GPU", "") : "") })
   return out
 }
