@@ -22,6 +22,7 @@ Panel {
   readonly property var configuredModules: Model.parseModules(setting("modules", Model.SETTINGS.modules))
   readonly property bool hasGpu: !!(service && service.hasGpu)
   readonly property bool hasBattery: !!(service && service.hasBattery)
+  readonly property bool hasBatteryPage: hasBattery || !!(service && service.hasPeripherals)
   readonly property var barModules: {
     var out = []
     for (var i = 0; i < configuredModules.length; i++) {
@@ -32,7 +33,7 @@ Panel {
     }
     return out.length > 0 ? out : ["cpu"]
   }
-  readonly property var moduleTabs: Model.panelTabs(hasBattery, setting("tabs", Model.SETTINGS.tabs))
+  readonly property var moduleTabs: Model.panelTabs(hasBatteryPage, setting("tabs", Model.SETTINGS.tabs))
   readonly property var panelTabs: moduleTabs.concat(["settings"])
   readonly property color fg: Color.popups.text
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family

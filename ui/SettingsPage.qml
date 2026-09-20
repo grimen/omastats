@@ -19,6 +19,7 @@ Column {
 
   readonly property bool hasGpu: !!(service && service.hasGpu)
   readonly property bool hasBattery: !!(service && service.hasBattery)
+  readonly property bool hasBatteryPage: hasBattery || !!(service && service.hasPeripherals)
   readonly property var barModules: Model.parseModules(Model.settingValue(settings, "modules"))
   readonly property var tabModules: Model.parseModules(Model.settingValue(settings, "tabs"))
   readonly property var availableModules: {
@@ -43,7 +44,7 @@ Column {
     var out = []
     for (var i = 0; i < Model.PANEL_TABS.length; i++) {
       var id = Model.PANEL_TABS[i]
-      if (id === "battery" && !hasBattery) continue
+      if (id === "battery" && !hasBatteryPage) continue
       out.push(id)
     }
     return out
