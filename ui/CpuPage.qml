@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Ui
 import "../Model.js" as Model
 
 Column {
@@ -22,7 +23,9 @@ Column {
   readonly property color s3: service ? service.tertiary : Color.accent
 
   readonly property var cpu: snap.cpu || ({})
-  readonly property var gpu: snap.gpu || null
+  readonly property var gpu: Model.selectGpu(snap, Model.settingValue(settings, "gpuSource"))
+  // With a GPU tab the card here is a summary that leads to it.
+  readonly property bool gpuTab: !!(host && Array.isArray(host.panelTabs) && host.panelTabs.indexOf("gpu") !== -1)
   readonly property var procs: snap.procs || null
   readonly property var cores: Array.isArray(cpu.cores) ? cpu.cores : []
   readonly property var efficiency: Array.isArray(cpu.efficiency) ? cpu.efficiency : []
@@ -161,8 +164,21 @@ Column {
   }
 
   Card {
+    id: gpuCard
     visible: !!root.gpu && root.flag("showGpu")
     foreground: root.foreground
+    color: gpuHover.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : Util.alpha(root.foreground, 0.035)
+
+    MouseArea {
+      id: gpuHover
+      parent: gpuCard
+      anchors.fill: parent
+      z: 1
+      enabled: root.gpuTab
+      hoverEnabled: enabled
+      cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+      onClicked: root.host.showTab("gpu")
+    }
 
     CardHeader {
       title: "GPU"
@@ -174,7 +190,7 @@ Column {
     HistoryGraph {
       width: parent.width
       height: Style.space(48)
-      series: [root.hist.gpu || []]
+      series: [Model.gpuHistory(root.hist, root.gpu).util]
       colors: [root.s1]
       ceiling: 100
       baselineColor: Util.alpha(root.foreground, 0.14)
@@ -190,7 +206,7 @@ Column {
     }
 
     StatRow {
-      visible: !!(root.gpu && root.gpu.memTotal > 0)
+      visible: !root.gpuTab && !!(root.gpu && root.gpu.memTotal > 0)
       label: "Memory"
       detail: root.gpu && root.gpu.memTotal > 0 ? Model.percentText(root.gpu.memUsed / root.gpu.memTotal * 100) : ""
       value: root.gpu ? Model.pairText(root.gpu.memUsed, root.gpu.memTotal).replace(/ [A-Z]+$/, "") : ""
@@ -200,7 +216,7 @@ Column {
     }
 
     StatRow {
-      visible: !!(root.gpu && isFinite(Number(root.gpu.power)) && root.gpu.power !== null)
+      visible: !root.gpuTab && !!(root.gpu && isFinite(Number(root.gpu.power)) && root.gpu.power !== null)
       label: "Power"
       value: root.gpu && root.gpu.power !== null ? String(Math.round(root.gpu.power)) : ""
       unit: "W"

@@ -418,49 +418,204 @@ class CpuSampler:
 
 # ----------------------------------------------------------------------------- GPU
 
+GPU_VENDORS = {"0x1002": "amd", "0x8086": "intel", "0x10de": "nvidia"}
+GPU_KIND_ORDER = {"external": 0, "discrete": 1, "integrated": 2}
+GPU_LIMIT = 8
+GPU_RESCAN_SECONDS = 5.0
+GPU_FIELDS = (
+    "id", "card", "name", "vendor", "kind", "driver", "bootVga",
+    "util", "memUsed", "memTotal", "memBusy", "gttUsed", "gttTotal",
+    "temp", "tempJunction", "tempMem", "power", "mhz", "maxMhz", "memMhz",
+    "fan", "fanPercent", "fanRpm",
+)
+
+
+def normalize_bus_id(value: str) -> str:
+    """`00000000:01:00.0` (nvidia-smi) and `0000:01:00.0` (sysfs) compare equal."""
+    parts = value.strip().lower().split(":")
+    if len(parts) != 3:
+        return ""
+    return f"{parts[0][-4:].rjust(4, '0')}:{parts[1]}:{parts[2]}"
+
+
+def classify_gpu(vendor: str, slot: str, removable: bool, has_mem_busy: bool, has_mclk: bool) -> str:
+    """Discrete, external (Thunderbolt/USB4) or integrated; used for labels and ordering."""
+    if removable:
+        return "external"
+    if vendor == "intel":
+        return "integrated" if slot == "0000:00:02.0" else "discrete"
+    if vendor == "amd":
+        return "discrete" if has_mem_busy or has_mclk else "integrated"
+    return "discrete"
+
+
+def gpu_sort_key(kind: str, mem_total: float | None, boot_vga: bool, number: int) -> tuple:
+    """Primary first: external, discrete, integrated; then memory, boot display, card order."""
+    return (GPU_KIND_ORDER.get(kind, 3), -(mem_total or 0), 0 if boot_vga else 1, number)
+
+
+def parse_nvidia_line(line: str) -> tuple[str, dict] | None:
+    parts = [p.strip() for p in line.strip().split(",")]
+    if len(parts) < 11:
+        return None
+    bus = normalize_bus_id(parts[1])
+    if not bus:
+        return None
+
+    def num(value: str) -> float | None:
+        try:
+            return float(value)
+        except ValueError:
+            return None
+
+    mem_used = num(parts[4])
+    mem_total = num(parts[5])
+    fan = num(parts[10])
+    return bus, {
+        "name": bounded_text(parts[2]),
+        "util": num(parts[3]),
+        "memUsed": mem_used * 1024 * 1024 if mem_used is not None else None,
+        "memTotal": mem_total * 1024 * 1024 if mem_total is not None else None,
+        "temp": num(parts[6]),
+        "power": num(parts[7]),
+        "mhz": num(parts[8]),
+        "maxMhz": num(parts[9]),
+        "fan": fan,
+        "fanPercent": fan,
+    }
+
 
 class GpuSampler:
-    """NVIDIA via a long-running `nvidia-smi -l` reader, AMD/Intel via sysfs."""
+    """Every GPU: NVIDIA via a long-running `nvidia-smi -l` reader, AMD/Intel via sysfs."""
 
     QUERY = (
-        "name,utilization.gpu,memory.used,memory.total,temperature.gpu,"
+        "index,pci.bus_id,name,utilization.gpu,memory.used,memory.total,temperature.gpu,"
         "power.draw,clocks.gr,clocks.max.gr,fan.speed"
     )
 
-    def __init__(self) -> None:
-        self.kind: str | None = None
-        self.latest: dict | None = None
+    def __init__(self, drm: str = "/sys/class/drm") -> None:
+        self.drm = drm
+        self.devices: list[dict] = []
+        self.signature: tuple = ()
+        self.last_scan: float | None = None
+        self.latest: dict[str, dict] = {}
         self.lock = threading.Lock()
         self.proc: subprocess.Popen | None = None
-        self.card: str | None = None
-        self.hwmon: str | None = None
-        self.name = ""
         self._detect()
 
+    def _cards(self) -> list[tuple[str, str]]:
+        """(card, PCI slot) for every DRM card; cheap enough to repeat for hotplug."""
+        out = []
+        for card in list_dir(self.drm):
+            if not re.fullmatch(r"card\d+", card):
+                continue
+            try:
+                slot = os.path.basename(os.path.realpath(f"{self.drm}/{card}/device"))
+            except OSError:
+                continue
+            out.append((card, slot))
+        return out
+
     def _detect(self) -> None:
-        drm = "/sys/class/drm"
-        if os.path.isdir(drm):
-            for card in list_dir(drm):
-                if not re.fullmatch(r"card\d+", card):
-                    continue
-                device = f"{drm}/{card}/device"
-                vendor = read_text(f"{device}/vendor").lower()
-                if vendor == "0x1002":
-                    self.kind, self.card = "amd", device
-                    break
-                if vendor == "0x8086":
-                    self.kind, self.card = "intel", device
-                elif vendor == "0x10de" and self.kind is None:
-                    self.kind, self.card = "nvidia", device
-        if self.kind == "nvidia" and command_path("nvidia-smi"):
-            self._start_nvidia()
-        elif self.kind == "nvidia":
-            self.kind = None
-        if self.card:
-            for hw in list_dir(f"{self.card}/hwmon"):
-                self.hwmon = f"{self.card}/hwmon/{hw}"
+        cards = self._cards()
+        self.signature = tuple(cards)
+        self.last_scan = time.monotonic()
+        devices: list[dict] = []
+        seen: set[str] = set()
+        for card, slot in cards:
+            device = f"{self.drm}/{card}/device"
+            vendor = GPU_VENDORS.get(read_text(f"{device}/vendor").lower())
+            if vendor is None or slot in seen or len(devices) >= GPU_LIMIT:
+                continue
+            seen.add(slot)
+            hwmon = None
+            for hw in list_dir(f"{device}/hwmon"):
+                hwmon = f"{device}/hwmon/{hw}"
                 break
-            self.name = self._pci_name(self.card)
+            channels = self._hwmon_channels(hwmon)
+            has_mclk = any(label == "mclk" for label, _ in channels.get("freq", []))
+            has_mem_busy = os.path.exists(f"{device}/mem_busy_percent")
+            try:
+                driver = os.path.basename(os.path.realpath(f"{device}/driver"))
+            except OSError:
+                driver = ""
+            max_mhz = None
+            if vendor == "amd":
+                levels = re.findall(r"(\d+)\s*mhz", read_text(f"{device}/pp_dpm_sclk").lower())
+                if levels:
+                    max_mhz = float(levels[-1])
+            devices.append({
+                "id": slot,
+                "card": card,
+                "number": int(card[4:]),
+                "device": device,
+                "vendor": vendor,
+                "driver": bounded_text(driver),
+                "hwmon": hwmon,
+                "channels": channels,
+                "name": self._pci_name(device),
+                "kind": classify_gpu(vendor, slot, self._removable(device), has_mem_busy, has_mclk),
+                "bootVga": read_text(f"{device}/boot_vga") == "1",
+                "maxMhz": max_mhz,
+                "energy": None,
+            })
+        self.devices = devices
+        wants_nvidia = any(d["vendor"] == "nvidia" for d in devices)
+        if wants_nvidia and self.proc is None and command_path("nvidia-smi"):
+            self._start_nvidia()
+        elif not wants_nvidia:
+            self.stop()
+
+    @staticmethod
+    def _removable(device: str) -> bool:
+        """True when the card or a bridge above it is marked removable (eGPU)."""
+        try:
+            path = os.path.realpath(device)
+        except OSError:
+            return False
+        for _ in range(16):
+            if not path.startswith("/sys/devices/") or path.count("/") < 4:
+                break
+            if read_text(f"{path}/removable") == "removable":
+                return True
+            path = os.path.dirname(path)
+        return False
+
+    @staticmethod
+    def _hwmon_channels(hwmon: str | None) -> dict[str, list[tuple[str, str]]]:
+        """{"temp": [(label, "/…/temp1"), …], …}, read once so sampling only opens values."""
+        channels: dict[str, list[tuple[str, str]]] = {}
+        if not hwmon:
+            return channels
+        seen: set[str] = set()
+        for entry in list_dir(hwmon):
+            match = re.fullmatch(r"((temp|power|freq|fan|pwm|energy)\d+)(_label|_input|_average)?", entry)
+            if not match or match.group(1) in seen:
+                continue
+            seen.add(match.group(1))
+            label = read_text(f"{hwmon}/{match.group(1)}_label").lower()
+            channels.setdefault(match.group(2), []).append((label, f"{hwmon}/{match.group(1)}"))
+        return channels
+
+    @staticmethod
+    def _channel(device: dict, prefix: str, labels: tuple[str, ...], fallback: bool = True) -> float | None:
+        entries = device["channels"].get(prefix, [])
+        chosen = None
+        for wanted in labels:
+            for label, path in entries:
+                if label == wanted:
+                    chosen = path
+                    break
+            if chosen:
+                break
+        if chosen is None and fallback and entries:
+            chosen = entries[0][1]
+        if chosen is None:
+            return None
+        value = read_float(f"{chosen}_input")
+        if value is None and prefix == "power":
+            value = read_float(f"{chosen}_average")
+        return value
 
     @staticmethod
     def _pci_name(device: str) -> str:
@@ -492,95 +647,98 @@ class GpuSampler:
             )
         except OSError:
             self.proc = None
-            self.kind = None
             return
-        threading.Thread(target=self._read_nvidia, daemon=True).start()
+        threading.Thread(target=self._read_nvidia, args=(self.proc,), daemon=True).start()
 
-    def _read_nvidia(self) -> None:
-        assert self.proc and self.proc.stdout
-        for line in bounded_lines(self.proc.stdout, STREAM_LINE_LIMIT):
-            parts = [p.strip() for p in line.strip().split(",")]
-            if len(parts) < 9:
+    def _read_nvidia(self, proc: subprocess.Popen) -> None:
+        assert proc.stdout
+        for line in bounded_lines(proc.stdout, STREAM_LINE_LIMIT):
+            parsed = parse_nvidia_line(line)
+            if parsed is None:
                 continue
-
-            def num(value: str) -> float | None:
-                try:
-                    return float(value)
-                except ValueError:
-                    return None
-
-            mem_used = num(parts[2])
-            mem_total = num(parts[3])
-            snapshot = {
-                "name": bounded_text(parts[0]),
-                "vendor": "nvidia",
-                "util": num(parts[1]),
-                "memUsed": mem_used * 1024 * 1024 if mem_used is not None else None,
-                "memTotal": mem_total * 1024 * 1024 if mem_total is not None else None,
-                "temp": num(parts[4]),
-                "power": num(parts[5]),
-                "mhz": num(parts[6]),
-                "maxMhz": num(parts[7]),
-                "fan": num(parts[8]),
-            }
             with self.lock:
-                self.latest = snapshot
+                if len(self.latest) < GPU_LIMIT or parsed[0] in self.latest:
+                    self.latest[parsed[0]] = parsed[1]
+        with self.lock:
+            self.latest = {}
 
-    def _hwmon_value(self, prefix: str, labels: tuple[str, ...]) -> float | None:
-        if not self.hwmon:
-            return None
-        chosen = None
-        for entry in list_dir(self.hwmon):
-            if entry.startswith(prefix) and entry.endswith("_input"):
-                label = read_text(f"{self.hwmon}/{entry[:-6]}_label").lower()
-                if label in labels or chosen is None:
-                    chosen = entry
-                    if label in labels:
-                        break
-        if not chosen:
-            return None
-        return read_float(f"{self.hwmon}/{chosen}")
+    def _sample_sysfs(self, device: dict, out: dict) -> None:
+        path = device["device"]
+        card = os.path.dirname(path)
+        out["util"] = read_float(f"{path}/gpu_busy_percent")
+        out["memBusy"] = read_float(f"{path}/mem_busy_percent")
+        out["memUsed"] = read_float(f"{path}/mem_info_vram_used")
+        out["memTotal"] = read_float(f"{path}/mem_info_vram_total")
+        out["gttUsed"] = read_float(f"{path}/mem_info_gtt_used")
+        out["gttTotal"] = read_float(f"{path}/mem_info_gtt_total")
+        for key, labels, fallback in (
+            ("temp", ("edge", "junction"), True),
+            ("tempJunction", ("junction",), False),
+            ("tempMem", ("mem",), False),
+        ):
+            value = self._channel(device, "temp", labels, fallback)
+            out[key] = value / 1000 if value else None
+        power = self._channel(device, "power", ("ppt", "power"))
+        if power:
+            out["power"] = power / 1_000_000
+        else:
+            energy = self._channel(device, "energy", ("pkg", "package"))
+            now = time.monotonic()
+            previous = device["energy"]
+            if energy is not None:
+                device["energy"] = (energy, now)
+                if previous and now > previous[1] and energy >= previous[0]:
+                    out["power"] = (energy - previous[0]) / 1_000_000 / (now - previous[1])
+        sclk = self._channel(device, "freq", ("sclk",))
+        if sclk is not None:
+            out["mhz"] = sclk / 1_000_000
+        else:
+            out["mhz"] = (
+                read_float(f"{card}/gt_cur_freq_mhz")
+                or read_float(f"{card}/gt/gt0/rps_cur_freq_mhz")
+                or read_float(f"{path}/tile0/gt0/freq0/cur_freq")
+            )
+        mclk = self._channel(device, "freq", ("mclk",), False)
+        out["memMhz"] = mclk / 1_000_000 if mclk else None
+        out["maxMhz"] = (
+            device["maxMhz"]
+            or read_float(f"{card}/gt_max_freq_mhz")
+            or read_float(f"{path}/tile0/gt0/freq0/max_freq")
+        )
+        out["fanRpm"] = self._channel(device, "fan", ())
+        pwm_path = device["channels"]["pwm"][0][1] if device["channels"].get("pwm") else None
+        pwm = read_float(pwm_path) if pwm_path else None
+        if pwm is not None:
+            pwm_max = read_float(f"{pwm_path}_max") or 255.0
+            out["fanPercent"] = round(max(0.0, min(100.0, pwm / pwm_max * 100)), 1)
+            out["fan"] = out["fanPercent"]
 
-    def sample(self) -> dict | None:
-        if self.kind == "nvidia":
-            with self.lock:
-                return dict(self.latest) if self.latest else {"name": self.name or "NVIDIA", "vendor": "nvidia", "util": None}
-        if self.kind in ("amd", "intel") and self.card:
-            util = read_float(f"{self.card}/gpu_busy_percent")
-            mem_used = read_float(f"{self.card}/mem_info_vram_used")
-            mem_total = read_float(f"{self.card}/mem_info_vram_total")
-            temp = self._hwmon_value("temp", ("edge", "junction"))
-            power = self._hwmon_value("power", ("ppt", "power"))
-            freq = self._hwmon_value("freq", ("sclk",))
-            mhz = None
-            if freq:
-                mhz = freq / 1_000_000
+    def sample_all(self) -> list[dict]:
+        if self.last_scan is None or time.monotonic() - self.last_scan >= GPU_RESCAN_SECONDS:
+            self.last_scan = time.monotonic()
+            if tuple(self._cards()) != self.signature:
+                self._detect()
+        with self.lock:
+            latest = dict(self.latest)
+        gpus = []
+        for device in self.devices:
+            out: dict = dict.fromkeys(GPU_FIELDS)
+            for key in ("id", "card", "vendor", "kind", "driver", "bootVga"):
+                out[key] = device[key]
+            out["name"] = device["name"] or {"amd": "AMD", "intel": "Intel", "nvidia": "NVIDIA"}[device["vendor"]]
+            if device["vendor"] == "nvidia":
+                out.update(latest.get(device["id"], {}))
             else:
-                gt = read_float(f"{os.path.dirname(self.card)}/gt_cur_freq_mhz") or read_float(f"{os.path.dirname(self.card)}/gt/gt0/rps_cur_freq_mhz")
-                if gt:
-                    mhz = gt
-            max_mhz = None
-            gt_max = read_float(f"{os.path.dirname(self.card)}/gt_max_freq_mhz")
-            if gt_max:
-                max_mhz = gt_max
-            return {
-                "name": self.name or ("AMD" if self.kind == "amd" else "Intel"),
-                "vendor": self.kind,
-                "util": util,
-                "memUsed": mem_used,
-                "memTotal": mem_total,
-                "temp": temp / 1000 if temp else None,
-                "power": power / 1_000_000 if power else None,
-                "mhz": mhz,
-                "maxMhz": max_mhz,
-                "fan": None,
-            }
-        return None
+                self._sample_sysfs(device, out)
+            gpus.append((gpu_sort_key(out["kind"], out["memTotal"], out["bootVga"], device["number"]), out))
+        gpus.sort(key=lambda item: item[0])
+        return [gpu for _, gpu in gpus]
 
     def stop(self) -> None:
-        if self.proc and self.proc.poll() is None:
-            kill_process_group(self.proc)
-            self.proc.wait()
+        proc, self.proc = self.proc, None
+        if proc and proc.poll() is None:
+            kill_process_group(proc)
+            proc.wait()
 
 
 # -------------------------------------------------------------------------- Memory
@@ -1582,7 +1740,7 @@ def main() -> int:
             last_slow = now_mono
         for key, fn in (
             ("cpu", cpu.sample),
-            ("gpu", gpu.sample),
+            ("gpus", gpu.sample_all),
             ("mem", sample_memory),
             ("disks", lambda: disks.sample(elapsed, now)),
             ("net", lambda: net.sample(elapsed, now, detail > 0)),
@@ -1592,6 +1750,9 @@ def main() -> int:
             except Exception as error:  # noqa: BLE001
                 payload[key] = None
                 payload["errors"].append(f"{key}: {error}")
+        # "gpu" is the primary GPU, kept for readers that predate "gpus".
+        payload["gpus"] = payload.get("gpus") or []
+        payload["gpu"] = payload["gpus"][0] if payload["gpus"] else None
         if isinstance(payload.get("net"), dict):
             payload["net"]["procs"] = connections_cache
         payload["sensors"] = sensors_cache

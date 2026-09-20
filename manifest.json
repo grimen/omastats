@@ -47,9 +47,10 @@
       "refreshSeconds": 1,
       "historySeconds": 240,
       "publicIp": true,
-      "tabs": "cpu,memory,disks,network,sensors,battery",
+      "tabs": "cpu,gpu,memory,disks,network,sensors,battery",
       "showProcesses": true,
       "disksSource": "all",
+      "gpuSource": "auto",
       "barSensors": "cpu",
       "barLabels": "text"
     },
@@ -65,8 +66,8 @@
         "key": "tabs",
         "type": "string",
         "label": "Panel tabs",
-        "description": "Comma-separated tabs shown in the panel: cpu, memory, disks, network, sensors, battery.",
-        "defaultValue": "cpu,memory,disks,network,sensors,battery"
+        "description": "Comma-separated tabs shown in the panel: cpu, gpu, memory, disks, network, sensors, battery. The GPU tab only appears when a GPU is present.",
+        "defaultValue": "cpu,gpu,memory,disks,network,sensors,battery"
       },
       {
         "key": "style",
@@ -101,10 +102,17 @@
         "defaultValue": "all"
       },
       {
+        "key": "gpuSource",
+        "type": "string",
+        "label": "GPU readout source",
+        "description": "\"auto\" (external, then discrete, then integrated) or a GPU's PCI address such as 0000:03:00.0.",
+        "defaultValue": "auto"
+      },
+      {
         "key": "barSensors",
         "type": "string",
         "label": "Sensor readouts",
-        "description": "Comma-separated: cpu, gpu, or hwmon ids like nct6687/fan1 (pick them on the Settings page).",
+        "description": "Comma-separated: cpu, gpu, gpu:<PCI address>, or hwmon ids like nct6687/fan1 (pick them on the Settings page).",
         "defaultValue": "cpu"
       },
       {

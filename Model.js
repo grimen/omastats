@@ -5,7 +5,7 @@
 
 var MODULES = [
   { id: "cpu",     icon: "󰻠", short: "CPU", label: "CPU",     page: "CpuPage.qml",     graph: true,  ring: true },
-  { id: "gpu",     icon: "󰢮", short: "GPU", label: "GPU",     page: "CpuPage.qml",     graph: true,  ring: true },
+  { id: "gpu",     icon: "󰢮", short: "GPU", label: "GPU",     page: "GpuPage.qml",     graph: true,  ring: true },
   { id: "memory",  icon: "󰍛", short: "MEM", label: "Memory",  page: "MemoryPage.qml",  graph: true,  ring: true },
   { id: "disks",   icon: "󰋊", short: "DSK", label: "Disks",   page: "DisksPage.qml",   graph: true,  ring: true },
   { id: "network", icon: "󰛳", short: "NET", label: "Network", page: "NetworkPage.qml", graph: true,  ring: false },
@@ -14,7 +14,7 @@ var MODULES = [
   { id: "settings", icon: "󰒓", short: "SET", label: "Settings", page: "SettingsPage.qml", graph: false }
 ]
 
-var PANEL_TABS = ["cpu", "memory", "disks", "network", "sensors", "battery"]
+var PANEL_TABS = ["cpu", "gpu", "memory", "disks", "network", "sensors", "battery"]
 
 // Every user-tunable key with its default. Flat keys keep the entry in
 // shell.json readable and editable from Setup → Plugins as well as from the
@@ -27,14 +27,16 @@ var SETTINGS = {
   graphWidth: 36,
   barLabels: "text",
   disksSource: "all",
+  gpuSource: "auto",
   barSensors: "cpu",
   temperatureUnit: "Celsius",
   refreshSeconds: 1,
   historySeconds: 240,
   publicIp: true,
-  tabs: "cpu,memory,disks,network,sensors,battery",
+  tabs: "cpu,gpu,memory,disks,network,sensors,battery",
   showProcesses: true,
   showCores: true, showLoad: true, showGpu: true,
+  showGpuMemory: true, showGpuSensors: true, showGpuOthers: true,
   showBreakdown: true,
   showVolumes: true, showActivity: true,
   showInterfaces: true, showTotals: true, showAddresses: true,
@@ -48,6 +50,11 @@ var PANEL_SECTIONS = {
     { key: "showCores", label: "Per-core rings" },
     { key: "showLoad", label: "Load average and uptime" },
     { key: "showGpu", label: "GPU" }
+  ],
+  gpu: [
+    { key: "showGpuMemory", label: "Memory" },
+    { key: "showGpuSensors", label: "Power, clocks, temperatures and fan" },
+    { key: "showGpuOthers", label: "Other GPUs" }
   ],
   memory: [
     { key: "showBreakdown", label: "Breakdown" }
@@ -117,15 +124,19 @@ function sensorLabel(temp) {
 }
 
 // Everything the bar's sensor readout can show, as {value, label, kind}.
-function sensorOptions(snapshot) {
+function sensorOptions(snapshot, gpuSource) {
   var s = snapshot || {}
   var cpu = s.cpu || {}
-  var gpu = s.gpu || null
+  var gpu = selectGpu(s, gpuSource)
   var sensors = s.sensors || {}
   var out = []
   if (isFinite(Number(cpu.temp)) && cpu.temp !== null) out.push({ value: "cpu", label: "CPU temperature", kind: "temp" })
   var gpuTemp = gpu && gpu.temp !== null && isFinite(Number(gpu.temp)) ? gpu.temp : sensors.gpuTemp
   if (gpuTemp !== null && gpuTemp !== undefined && isFinite(Number(gpuTemp))) out.push({ value: "gpu", label: "GPU temperature", kind: "temp" })
+  var gpus = gpuList(s)
+  for (var g = 0; gpus.length > 1 && g < gpus.length; g++) {
+    if (gpus[g].temp !== null && isFinite(Number(gpus[g].temp))) out.push({ value: "gpu:" + gpus[g].id, label: shortGpuName(gpus[g].name) + " temperature", kind: "temp" })
+  }
   var temps = Array.isArray(sensors.temps) ? sensors.temps : []
   for (var i = 0; i < temps.length; i++) out.push({ value: String(temps[i].id), label: sensorLabel(temps[i]), kind: "temp" })
   var fans = Array.isArray(sensors.fans) ? sensors.fans : []
@@ -134,10 +145,10 @@ function sensorOptions(snapshot) {
 }
 
 // One reading for the bar: {icon, label, text, unit, kind} or null.
-function sensorReading(snapshot, id, unit) {
+function sensorReading(snapshot, id, unit, gpuSource) {
   var s = snapshot || {}
   var cpu = s.cpu || {}
-  var gpu = s.gpu || null
+  var gpu = selectGpu(s, gpuSource)
   var sensors = s.sensors || {}
   if (id === "cpu") {
     if (!(isFinite(Number(cpu.temp)) && cpu.temp !== null)) return null
@@ -149,6 +160,12 @@ function sensorReading(snapshot, id, unit) {
     if (gpuTemp === null || gpuTemp === undefined || !isFinite(Number(gpuTemp))) return null
     var g = tempParts(gpuTemp, unit)
     return { icon: "󰢮", short: "GPU", label: "GPU", text: g.value, unit: g.unit, kind: "temp", celsius: gpuTemp }
+  }
+  if (String(id).indexOf("gpu:") === 0) {
+    var one = selectGpu(s, String(id).slice(4), true)
+    if (!one || one.temp === null || !isFinite(Number(one.temp))) return null
+    var o = tempParts(one.temp, unit)
+    return { icon: "󰢮", short: "GPU", label: shortGpuName(one.name), text: o.value, unit: o.unit, kind: "temp", celsius: one.temp }
   }
   var temps = Array.isArray(sensors.temps) ? sensors.temps : []
   for (var i = 0; i < temps.length; i++) {
@@ -183,6 +200,60 @@ function diskOptions(snapshot) {
     out.push({ value: names[j], label: names[j] + model })
   }
   return out
+}
+
+// ------------------------------------------------------------------- gpus
+
+// Every GPU, primary first. A sampler that predates "gpus" reports one.
+function gpuList(snapshot) {
+  var s = snapshot || {}
+  if (Array.isArray(s.gpus)) return s.gpus.filter(function(gpu) { return !!gpu })
+  return s.gpu ? [s.gpu] : []
+}
+
+// Stable key for histories and the gpuSource setting.
+function gpuKey(gpu) {
+  return gpu ? String(gpu.id || gpu.card || gpu.name || "gpu") : ""
+}
+
+// The GPU a readout follows: the chosen one while it is present, else the
+// primary. With strict set, a missing choice yields null instead.
+function selectGpu(snapshot, source, strict) {
+  var list = gpuList(snapshot)
+  var wanted = String(source || "auto")
+  for (var i = 0; wanted !== "auto" && i < list.length; i++) if (gpuKey(list[i]) === wanted) return list[i]
+  return strict || list.length === 0 ? null : list[0]
+}
+
+function gpuKindLabel(gpu) {
+  var kind = gpu ? String(gpu.kind || "") : ""
+  if (kind === "external") return "External"
+  if (kind === "integrated") return "Integrated"
+  return kind === "discrete" ? "Discrete" : ""
+}
+
+function gpuOptions(snapshot) {
+  var list = gpuList(snapshot)
+  var out = [{ value: "auto", label: "Automatic" }]
+  for (var i = 0; i < list.length; i++) {
+    var kind = gpuKindLabel(list[i])
+    out.push({ value: gpuKey(list[i]), label: shortGpuName(list[i].name).slice(0, 24) + (kind ? " · " + kind : "") })
+  }
+  return out
+}
+
+function gpuHistory(history, gpu) {
+  var all = history && history.gpus ? history.gpus : {}
+  return all[gpuKey(gpu)] || { util: [], mem: [], temp: [], power: [] }
+}
+
+// "766 rpm", "31%", or both; empty when the card reports no fan.
+function gpuFanText(gpu) {
+  if (!gpu) return ""
+  var parts = []
+  if (gpu.fanRpm !== null && isFinite(Number(gpu.fanRpm))) parts.push(Number(gpu.fanRpm) > 0 ? Math.round(gpu.fanRpm) + " rpm" : "Off")
+  if (gpu.fanPercent !== null && isFinite(Number(gpu.fanPercent)) && parts[0] !== "Off") parts.push(Math.round(gpu.fanPercent) + "%")
+  return parts.join(" · ")
 }
 
 // ------------------------------------------------------------- processes
@@ -275,9 +346,11 @@ function pageFile(tab) {
   return moduleDef(tab).page
 }
 
-// The panel tab that shows a given bar module (GPU lives on the CPU page).
-function tabFor(module) {
-  return module === "gpu" ? "cpu" : module
+// The panel tab that shows a given bar module: its own, except that the GPU
+// falls back to the CPU page's summary when the GPU tab is hidden.
+function tabFor(module, tabs) {
+  if (module === "gpu" && Array.isArray(tabs) && tabs.indexOf("gpu") === -1) return "cpu"
+  return module
 }
 
 function parseModules(raw) {
@@ -291,6 +364,7 @@ function parseModules(raw) {
     if (id === "net" || id === "wifi") id = "network"
     if (id === "temp" || id === "temps" || id === "sensor") id = "sensors"
     if (id === "bat") id = "battery"
+    if (id === "graphics" || id === "video") id = "gpu"
     var known = false
     for (var j = 0; j < MODULES.length; j++) if (MODULES[j].id === id) known = true
     if (known && out.indexOf(id) === -1) out.push(id)
@@ -300,12 +374,13 @@ function parseModules(raw) {
 
 // Module tabs in canonical order, filtered by the "tabs" setting and by the
 // hardware present. Never empty: the CPU tab is the floor.
-function panelTabs(hasBattery, tabsSetting) {
+function panelTabs(hasBattery, tabsSetting, hasGpu) {
   var wanted = parseModules(tabsSetting === undefined ? SETTINGS.tabs : tabsSetting)
   var out = []
   for (var i = 0; i < PANEL_TABS.length; i++) {
     var id = PANEL_TABS[i]
     if (id === "battery" && !hasBattery) continue
+    if (id === "gpu" && hasGpu === false) continue
     if (wanted.indexOf(id) === -1) continue
     out.push(id)
   }
@@ -445,6 +520,8 @@ function shortGpuName(name) {
     .replace(/^Radeon\s+/i, "")
     .replace(/^Intel\s+(Corporation\s+)?/i, "")
     .replace(/\s+Graphics$/i, "")
+    // lspci names a whole family: "RX 7900 XT/7900 XTX/7900 GRE/7900M".
+    .replace(/\s*\/.*$/, "")
 }
 
 function batteryIcon(percent, charging) {
@@ -482,7 +559,7 @@ function linkSpeedText(iface) {
 
 function emptyHistory() {
   return {
-    cpuUser: [], cpuSystem: [], cpuTotal: [], gpu: [],
+    cpuUser: [], cpuSystem: [], cpuTotal: [], gpu: [], gpus: {},
     memUsed: [], memPressure: [],
     netRx: [], netTx: [], diskRead: [], diskWrite: [], disks: {},
     battery: [], batteryCharging: []

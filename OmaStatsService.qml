@@ -36,7 +36,7 @@ Item {
   readonly property color danger: palette.danger
   readonly property color good: palette.good
 
-  readonly property bool hasGpu: !!(snapshot && snapshot.gpu)
+  readonly property bool hasGpu: Model.gpuList(snapshot).length > 0
   readonly property bool hasBattery: !!(snapshot && snapshot.battery && snapshot.battery.present)
   // The isolated Python entry point immediately execs the compiled sampler
   // when it is compatible, otherwise it remains the fallback implementation.
@@ -57,7 +57,8 @@ Item {
     var mem = data.mem || {}
     var net = data.net || {}
     var disks = data.disks || {}
-    var gpu = data.gpu
+    var gpus = Model.gpuList(data)
+    var gpu = gpus.length > 0 ? gpus[0] : null
     var battery = data.battery
     var memPercent = mem.total > 0 ? mem.used / mem.total * 100 : 0
     var perDisk = disks.perDisk || {}
@@ -70,11 +71,24 @@ Item {
       }
     }
 
+    var gpuHistory = {}
+    for (var g = 0; g < gpus.length; g++) {
+      var one = gpus[g]
+      var before = Model.gpuHistory(h, one)
+      gpuHistory[Model.gpuKey(one)] = {
+        util: Model.pushHistory(before.util, one.util, n),
+        mem: Model.pushHistory(before.mem, one.memTotal > 0 ? one.memUsed / one.memTotal * 100 : 0, n),
+        temp: Model.pushHistory(before.temp, one.temp, n),
+        power: Model.pushHistory(before.power, one.power, n)
+      }
+    }
+
     root.history = {
       cpuUser: Model.pushHistory(h.cpuUser, cpu.user, n),
       cpuSystem: Model.pushHistory(h.cpuSystem, cpu.system, n),
       cpuTotal: Model.pushHistory(h.cpuTotal, cpu.total, n),
       gpu: Model.pushHistory(h.gpu, gpu && isFinite(Number(gpu.util)) ? gpu.util : 0, n),
+      gpus: gpuHistory,
       memUsed: Model.pushHistory(h.memUsed, memPercent, n),
       memPressure: Model.pushHistory(h.memPressure, mem.pressureSome, n),
       netRx: Model.pushHistory(h.netRx, net.rx, n),
@@ -210,6 +224,7 @@ Item {
       download: net.rx,
       upload: net.tx,
       gpu: s.gpu ? s.gpu.util : null,
+      gpus: Model.gpuList(s).map(function(gpu) { return { id: Model.gpuKey(gpu), name: gpu.name, kind: gpu.kind, util: gpu.util } }),
       battery: s.battery && s.battery.present ? s.battery.percent : null,
       error: samplerError
     }

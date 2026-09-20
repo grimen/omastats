@@ -16,6 +16,8 @@ WidgetButton {
   property string temperatureUnit: "Celsius"
   // Disks: "all" or a block device name. Sensors: comma list of sensor ids.
   property string disksSource: "all"
+  // GPU: "auto" (the primary) or a GPU id such as a PCI slot.
+  property string gpuSource: "auto"
   property string barSensors: "cpu"
   // "text" stacks the module's short name vertically, iStat style; "icon" uses a glyph.
   property string labelMode: "text"
@@ -37,7 +39,9 @@ WidgetButton {
   readonly property real graphHeight: Math.max(8, barSize - Style.space(11))
 
   readonly property var cpu: snap.cpu || ({})
-  readonly property var gpu: snap.gpu || null
+  readonly property var gpus: Model.gpuList(snap)
+  readonly property var gpu: Model.selectGpu(snap, gpuSource)
+  readonly property var gpuUtilHistory: Model.gpuHistory(hist, gpu).util
   readonly property var mem: snap.mem || ({})
   readonly property var net: snap.net || ({})
   readonly property var disks: snap.disks || ({})
@@ -85,7 +89,7 @@ WidgetButton {
     var ids = Model.parseList(barSensors)
     var out = []
     for (var i = 0; i < ids.length; i++) {
-      var reading = Model.sensorReading(snap, ids[i], temperatureUnit)
+      var reading = Model.sensorReading(snap, ids[i], temperatureUnit, gpuSource)
       if (reading) out.push(reading)
     }
     if (out.length === 0) {
@@ -154,7 +158,12 @@ WidgetButton {
         if (Model.freqText(gpu.mhz)) parts.push(Model.freqText(gpu.mhz))
         if (isFinite(Number(gpu.temp))) parts.push(Model.tempLongText(gpu.temp, temperatureUnit))
         if (gpu.memTotal > 0) parts.push(Model.pairText(gpu.memUsed, gpu.memTotal))
-        return parts.join(" · ")
+        var gpuLines = [parts.join(" · ")]
+        for (var g = 0; g < gpus.length; g++) {
+          if (Model.gpuKey(gpus[g]) === Model.gpuKey(gpu)) continue
+          gpuLines.push(Model.shortGpuName(gpus[g].name) + (isFinite(Number(gpus[g].util)) && gpus[g].util !== null ? " " + Model.percentText(gpus[g].util) : ""))
+        }
+        return gpuLines.join("\n")
       case "memory":
         return "Memory " + Model.percentText(memPercent) + " · " + Model.pairText(mem.used, mem.total)
           + (mem.swapUsed > 0 ? "\nSwap " + Model.bytesText(mem.swapUsed) : "")
@@ -325,7 +334,7 @@ WidgetButton {
       ceiling: 100
       series: root.module === "cpu"
         ? [root.hist.cpuUser || [], root.hist.cpuSystem || []]
-        : [root.module === "memory" ? (root.hist.memUsed || []) : (root.hist.gpu || [])]
+        : [root.module === "memory" ? (root.hist.memUsed || []) : root.gpuUtilHistory]
       colors: [root.s1, root.s2]
       baselineColor: Util.alpha(root.foreground, 0.28)
     }

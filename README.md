@@ -17,8 +17,8 @@ OmaStats is an independent project and is not affiliated with Bjango.
 
 | Module  | Bar readout                         | Panel                                                                 |
 |---------|-------------------------------------|-----------------------------------------------------------------------|
-| CPU     | glyph · user/system history · %     | User/system history, per-core rings, load, uptime, GPU, top processes |
-| GPU     | glyph · utilisation history · %     | Shown on the CPU page (NVIDIA via `nvidia-smi`, AMD/Intel via sysfs)  |
+| CPU     | glyph · user/system history · %     | User/system history, per-core rings, load, uptime, GPU summary, top processes |
+| GPU     | glyph · utilisation history · %     | Usage, memory and temperature rings, video and shared memory, power, clocks, fan, every other GPU |
 | Memory  | glyph · used history · %            | Swap and memory rings, breakdown, processes                           |
 | Disks   | glyph · read/write history · rates  | Volumes (click to open in Files), activity for all disks or one, processes |
 | Network | glyph · up/down history · rates     | Upload/download, interfaces, public and local IPs, traffic per process |
@@ -26,6 +26,16 @@ OmaStats is an independent project and is not affiliated with Bjango.
 | Battery | glyph by level · %                  | Charge and health rings, charge history, power, cycles, peripherals   |
 
 Battery and GPU only appear when the hardware exists.
+
+Every GPU is sampled: NVIDIA through `nvidia-smi`, AMD and Intel through sysfs,
+whether discrete, external (Thunderbolt/USB4, picked up within a few seconds of
+being plugged in) or integrated. The bar readout and the GPU page follow one of
+them: by default the first external GPU, else the discrete one with the most
+memory, else the integrated one. Click another GPU on the page, or pick a
+**Source** in Settings, to follow that one instead. Readings a driver does not
+expose are left out; Intel's i915 and xe drivers publish no utilisation figure
+without elevated privileges, so Intel GPUs show clocks, power and temperature
+but no usage. An NVIDIA GPU without `nvidia-smi` is listed by name only.
 
 ## Install
 
@@ -89,7 +99,8 @@ Open the panel and click the gear at the right end of the tab strip (or press `s
 - **Bar**: switch each module's readout on or off, order them with the arrows,
   and pick each one's look: a mini history graph, a fullness ring (CPU, GPU,
   memory, disk capacity, battery charge), a figure, or a graph or ring with the
-  figure. The Disks readout can follow all disks or one device; the Sensors
+  figure. The Disks readout can follow all disks or one device; the GPU readout
+  can follow any GPU when there are several; the Sensors
   readout shows whichever temperatures and fans you tick.
 - **Panel**: choose which tabs appear and which sections each page shows.
 - **General**: temperature unit, refresh interval (0.1 s to 10 s), history span,
@@ -107,17 +118,19 @@ edited there by hand or through Setup → Plugins:
 | `modules`                 | `cpu,memory,network`                      | Bar readouts, in order: `cpu gpu memory disks network sensors battery` |
 | `style`                   | `both`                                    | Default look of a readout: `graph`, `ring`, `text`, `both` (graph and figure), or `ring-text` |
 | `cpuStyle` … `batteryStyle` | *(inherit)*                             | Per-module override of `style`                            |
-| `tabs`                    | `cpu,memory,disks,network,sensors,battery` | Tabs shown in the panel                                  |
+| `tabs`                    | `cpu,gpu,memory,disks,network,sensors,battery` | Tabs shown in the panel                              |
 | `graphWidth`              | `36`                                      | Width of each mini graph in the bar                       |
 | `barLabels`               | `text`                                    | `text` stacks the module's letters vertically, `icon` uses glyphs |
 | `disksSource`             | `all`                                     | Disk readout and activity graph: `all` or a device like `nvme0n1` |
-| `barSensors`              | `cpu`                                     | Sensor readouts: `cpu`, `gpu`, or hwmon ids like `nct6687/fan1` |
+| `gpuSource`               | `auto`                                    | GPU readout and page: `auto` or a PCI address like `0000:03:00.0` |
+| `barSensors`              | `cpu`                                     | Sensor readouts: `cpu`, `gpu`, `gpu:<PCI address>`, or hwmon ids like `nct6687/fan1` |
 | `temperatureUnit`         | `Celsius`                                 | `Celsius` or `Fahrenheit`                                 |
 | `refreshSeconds`          | `1`                                       | Sampling interval: 0.1, 0.2, 0.5, 1, 2, 5 or 10           |
 | `historySeconds`          | `240`                                     | How far back the graphs reach, in seconds                 |
 | `publicIp`                | `true`                                    | Look up the public address (api.ipify.org) on the Network page |
 | `showProcesses`           | `true`                                    | Top processes on every page                               |
 | `showCores`, `showLoad`, `showGpu` | `true`                           | CPU page sections                                         |
+| `showGpuMemory`, `showGpuSensors`, `showGpuOthers` | `true`           | GPU page sections                                         |
 | `showBreakdown`           | `true`                                    | Memory breakdown                                          |
 | `showVolumes`, `showActivity` | `true`                                | Disks page sections                                       |
 | `showInterfaces`, `showTotals`, `showAddresses` | `true`              | Network page sections                                     |
@@ -135,7 +148,7 @@ Several instances are allowed, so modules can be spread across the bar:
 
 - **Left click** a readout opens its page; clicking the same readout again closes the panel.
 - **Right click** launches `btop`. **Middle click** refreshes the public IP.
-- In the panel: `h`/`l` or `←`/`→` switch tabs, `1`–`6` jump to a tab, `s` opens
+- In the panel: `h`/`l` or `←`/`→` switch tabs, `1`–`7` jump to a tab, `s` opens
   Settings, `/` searches processes, `j`/`k` scroll, `Tab` moves to the neighbouring
   bar panel, `Esc` closes, `r` refreshes.
 - Addresses on the Network page copy to the clipboard when clicked. Volumes on

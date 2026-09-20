@@ -32,13 +32,14 @@ Panel {
     }
     return out.length > 0 ? out : ["cpu"]
   }
-  readonly property var moduleTabs: Model.panelTabs(hasBattery, setting("tabs", Model.SETTINGS.tabs))
+  readonly property var moduleTabs: Model.panelTabs(hasBattery, setting("tabs", Model.SETTINGS.tabs), hasGpu)
   readonly property var panelTabs: moduleTabs.concat(["settings"])
   readonly property color fg: Color.popups.text
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string instanceKey: moduleName + ":" + Math.random().toString(36).slice(2, 8)
 
   readonly property string disksSource: String(setting("disksSource", Model.SETTINGS.disksSource) || "all")
+  readonly property string gpuSource: String(setting("gpuSource", Model.SETTINGS.gpuSource) || "auto")
   readonly property string barSensors: String(setting("barSensors", Model.SETTINGS.barSensors) || "cpu")
   readonly property string barLabels: String(setting("barLabels", Model.SETTINGS.barLabels)).toLowerCase() === "icon" ? "icon" : "text"
 
@@ -79,7 +80,7 @@ Panel {
   function styleFor(module) { return Model.moduleStyle(settings, module) }
 
   function showTab(id) {
-    var tab = Model.tabFor(id)
+    var tab = Model.tabFor(id, panelTabs)
     if (panelTabs.indexOf(tab) === -1) tab = panelTabs[0]
     if (currentTab !== tab) {
       currentTab = tab
@@ -89,7 +90,7 @@ Panel {
 
   // Bar click: open on that module; a second click on the same module closes.
   function toggleModule(id) {
-    var tab = Model.tabFor(id)
+    var tab = Model.tabFor(id, panelTabs)
     if (opened && currentTab === tab) { close(); return }
     showTab(tab)
     if (!opened) open()
@@ -246,6 +247,7 @@ Panel {
         graphWidth: root.graphWidth
         temperatureUnit: root.temperatureUnit
         disksSource: root.disksSource
+        gpuSource: root.gpuSource
         barSensors: root.barSensors
         labelMode: root.barLabels
         onActivated: function(id, button) {
