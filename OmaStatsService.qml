@@ -38,6 +38,8 @@ Item {
 
   readonly property bool hasGpu: !!(snapshot && snapshot.gpu)
   readonly property bool hasBattery: !!(snapshot && snapshot.battery && snapshot.battery.present)
+  // Mice, keyboards and the like: they earn the Battery tab on a desktop too.
+  readonly property bool hasPeripherals: !!(snapshot && snapshot.battery && Array.isArray(snapshot.battery.peripherals) && snapshot.battery.peripherals.length > 0)
   // The isolated Python entry point immediately execs the compiled sampler
   // when it is compatible, otherwise it remains the fallback implementation.
   // Absolute paths and a cleared environment keep launch behavior independent
