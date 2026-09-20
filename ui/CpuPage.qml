@@ -1,5 +1,8 @@
 import QtQuick
+import Quickshell
+import Quickshell.Services.UPower
 import qs.Commons
+import qs.Ui
 import "../Model.js" as Model
 
 Column {
@@ -27,6 +30,21 @@ Column {
   readonly property var cores: Array.isArray(cpu.cores) ? cpu.cores : []
   readonly property var efficiency: Array.isArray(cpu.efficiency) ? cpu.efficiency : []
   readonly property bool hybrid: efficiency.length > 0 && efficiency.length < cores.length
+
+  // power-profiles-daemon's profile, switched through Omarchy's own command so
+  // the choice is remembered per power source like the shell's power panel does.
+  readonly property string powerProfile: PowerProfiles.profile === PowerProfile.Performance ? "performance"
+    : PowerProfiles.profile === PowerProfile.PowerSaver ? "power-saver" : "balanced"
+  readonly property var powerProfiles: {
+    var out = [{ value: "power-saver", label: "Power saver" }, { value: "balanced", label: "Balanced" }]
+    if (PowerProfiles.hasPerformanceProfile) out.push({ value: "performance", label: "Performance" })
+    return out
+  }
+
+  function setPowerProfile(profile) {
+    if (profile === powerProfile) return
+    Quickshell.execDetached(["/usr/share/omarchy/bin/omarchy-powerprofiles-set", "autodetect", String(profile)])
+  }
 
   function headerDetail(mhz, temp) {
     var parts = []
@@ -119,10 +137,11 @@ Column {
   }
 
   Card {
-    visible: root.flag("showLoad")
+    visible: root.flag("showLoad") || root.flag("showPowerProfile")
     foreground: root.foreground
 
     Row {
+      visible: root.flag("showLoad")
       width: parent.width
 
       Column {
@@ -157,6 +176,17 @@ Column {
           font.bold: true
         }
       }
+    }
+
+    Dropdown {
+      visible: root.flag("showPowerProfile")
+      width: parent.width
+      label: "Power profile"
+      options: root.powerProfiles
+      value: root.powerProfile
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onChanged: function(value) { root.setPowerProfile(value) }
     }
   }
 

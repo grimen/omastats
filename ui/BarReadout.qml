@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell.Services.UPower
 import qs.Commons
 import qs.Ui
 import "../Model.js" as Model
@@ -148,6 +149,7 @@ WidgetButton {
         if (Model.freqText(cpu.mhz)) parts.push(Model.freqText(cpu.mhz))
         if (isFinite(Number(cpu.temp))) parts.push(Model.tempLongText(cpu.temp, temperatureUnit))
         return parts.join(" · ") + "\nLoad " + Model.loadText(cpu.load) + " · Up " + Model.uptimeText(cpu.uptime)
+          + "\n" + (PowerProfiles.profile === PowerProfile.Performance ? "Performance" : PowerProfiles.profile === PowerProfile.PowerSaver ? "Power saver" : "Balanced") + " profile"
       case "gpu":
         if (!gpu) return "GPU not detected"
         parts.push(Model.shortGpuName(gpu.name) + " " + (isFinite(Number(gpu.util)) ? Model.percentText(gpu.util) : ""))
