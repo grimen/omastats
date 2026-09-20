@@ -50,6 +50,7 @@ Column {
   }
   readonly property var snapshot: service ? service.snapshot : ({})
   readonly property var diskOptions: Model.diskOptions(snapshot)
+  readonly property var gpuOptions: Model.gpuOptions(snapshot)
   readonly property var sensorOptions: Model.sensorOptions(snapshot)
   readonly property var barSensorIds: Model.parseList(Model.settingValue(settings, "barSensors"))
 
@@ -205,6 +206,19 @@ Column {
           foreground: root.foreground
           fontFamily: root.fontFamily
           onChanged: function(value) { root.set("disksSource", value) }
+        }
+
+        // GPU: which card the readout follows, when there are several.
+        Dropdown {
+          visible: moduleRow.enabled && moduleRow.moduleId === "gpu" && root.gpuOptions.length > 2
+          x: Style.space(12) + moduleSwitch.width + Style.space(12)
+          width: parent.width - x
+          label: "Source"
+          options: root.gpuOptions
+          value: String(Model.settingValue(root.settings, "gpuSource") || "auto")
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onChanged: function(value) { root.set("gpuSource", value) }
         }
 
         // Sensors: every reading the bar readout should carry.

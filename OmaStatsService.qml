@@ -36,7 +36,7 @@ Item {
   readonly property color danger: palette.danger
   readonly property color good: palette.good
 
-  readonly property bool hasGpu: !!(snapshot && snapshot.gpu)
+  readonly property bool hasGpu: Model.gpuList(snapshot).length > 0
   readonly property bool hasBattery: !!(snapshot && snapshot.battery && snapshot.battery.present)
   // The isolated Python entry point immediately execs the compiled sampler
   // when it is compatible, otherwise it remains the fallback implementation.
@@ -69,6 +69,12 @@ Item {
         write: Model.pushHistory(previous.write, perDisk[name].write, n)
       }
     }
+    var gpus = Model.gpuList(data)
+    var gpuHistory = {}
+    for (var g = 0; g < gpus.length; g++) {
+      var key = Model.gpuKey(gpus[g])
+      gpuHistory[key] = Model.pushHistory(h.gpus ? h.gpus[key] : [], isFinite(Number(gpus[g].util)) ? gpus[g].util : 0, n)
+    }
 
     root.history = {
       cpuUser: Model.pushHistory(h.cpuUser, cpu.user, n),
@@ -82,6 +88,7 @@ Item {
       diskRead: Model.pushHistory(h.diskRead, disks.read, n),
       diskWrite: Model.pushHistory(h.diskWrite, disks.write, n),
       disks: diskHistory,
+      gpus: gpuHistory,
       battery: Model.pushHistory(h.battery, battery && battery.present ? battery.percent : 0, n),
       batteryCharging: Model.pushHistory(h.batteryCharging, battery && battery.status === "Charging" ? 1 : 0, n)
     }

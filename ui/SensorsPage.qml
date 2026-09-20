@@ -22,7 +22,7 @@ Column {
   readonly property color danger: service ? service.danger : Color.urgent
 
   readonly property var cpu: snap.cpu || ({})
-  readonly property var gpu: snap.gpu || null
+  readonly property var gpu: Model.pickGpu(snap, String(Model.settingValue(settings, "gpuSource") || "auto"))
   readonly property var sensors: snap.sensors || ({})
   readonly property var temps: sortedTemps(Array.isArray(sensors.temps) ? sensors.temps : [])
   readonly property var fans: Array.isArray(sensors.fans) ? sensors.fans : []
