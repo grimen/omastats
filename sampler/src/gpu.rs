@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const NVIDIA_QUERY: &str =
-    "name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,clocks.gr,clocks.max.gr,fan.speed,pci.bus_id";
+    "name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,clocks.gr,clocks.max.gr,fan.speed,pci.bus_id,utilization.memory,utilization.encoder,utilization.decoder,clocks.mem,power.limit";
 const GPU_LIMIT: usize = 8;
 const GPU_RESCAN: Duration = Duration::from_secs(5);
 const AMD_NAMES: &str = "/usr/share/libdrm/amdgpu.ids";
@@ -79,6 +79,15 @@ fn amd_marketing_name(table: &str, device: &str, revision: &str) -> Option<Strin
         let name = fields.next()?.trim();
         (matches && !name.is_empty()).then(|| name.to_string())
     })
+}
+
+/// PCIe generation from sysfs' `16.0 GT/s PCIe`.
+fn pcie_gen(speed: &str) -> Option<u32> {
+    let rate: f64 = speed.split_whitespace().next()?.parse().ok()?;
+    [(2.5, 1), (5.0, 2), (8.0, 3), (16.0, 4), (32.0, 5), (64.0, 6)]
+        .iter()
+        .find(|(gts, _)| (rate - gts).abs() < 0.01)
+        .map(|(_, gen)| *gen)
 }
 
 /// amdgpu hides `mem_busy_percent` on APUs, Intel's integrated GPU sits at
@@ -322,6 +331,8 @@ impl GpuSampler {
                     continue;
                 }
                 let num = |s: &str| s.parse::<f64>().ok();
+                // Older drivers may not know the newer fields: they stay null.
+                let extra = |index: usize| parts.get(index).and_then(|s| num(s));
                 let mem_used = num(parts[2]).map(|v| v * 1024.0 * 1024.0);
                 let mem_total = num(parts[3]).map(|v| v * 1024.0 * 1024.0);
                 let id = normalize_bus_id(parts[9]);
@@ -337,6 +348,13 @@ impl GpuSampler {
                     "mhz": opt_f64(num(parts[6])),
                     "maxMhz": opt_f64(num(parts[7])),
                     "fan": opt_f64(num(parts[8])),
+                    "memBusy": opt_f64(extra(10)),
+                    "vcnBusy": opt_f64(match (extra(11), extra(12)) {
+                        (Some(enc), Some(dec)) => Some(enc.max(dec)),
+                        (enc, dec) => enc.or(dec),
+                    }),
+                    "memMhz": opt_f64(extra(13)),
+                    "powerCap": opt_f64(extra(14)),
                 });
                 if let Ok(mut slot) = latest.lock() {
                     slot.insert(id, snapshot);
@@ -347,12 +365,39 @@ impl GpuSampler {
         true
     }
 
-    fn hwmon_value(device: &Device, prefix: &str, labels: &[&str]) -> Option<f64> {
+    /// The channel with one of `labels`, else the first one unless `exact`.
+    fn hwmon_value(device: &Device, prefix: &str, labels: &[&str], exact: bool) -> Option<f64> {
         let hwmon = device.hwmon.as_ref()?;
         let entries = list_dir(hwmon);
         // Discrete AMD cards report power as `power1_average` only.
-        Self::hwmon_channel(hwmon, &entries, prefix, "_input", labels)
-            .or_else(|| Self::hwmon_channel(hwmon, &entries, prefix, "_average", labels))
+        Self::hwmon_channel(hwmon, &entries, prefix, "_input", labels, exact)
+            .or_else(|| Self::hwmon_channel(hwmon, &entries, prefix, "_average", labels, exact))
+    }
+
+    /// The narrowest and slowest link between the card and the CPU, which is
+    /// what an eGPU dock or a x4 slot limits, with the widest the card offers.
+    fn pcie_link(card: &str) -> (Option<f64>, Option<f64>, Option<f64>) {
+        let (mut gen, mut width, mut max_width): (Option<u32>, Option<f64>, Option<f64>) =
+            (None, None, None);
+        let mut path = match std::fs::canonicalize(card) {
+            Ok(p) => p,
+            Err(_) => return (None, None, None),
+        };
+        while path.starts_with("/sys/devices/") && path.components().count() > 4 {
+            if let Some(w) = read_f64(path.join("current_link_width")).filter(|w| *w > 0.0) {
+                width = Some(width.map_or(w, |now| now.min(w)));
+            }
+            if let Some(w) = read_f64(path.join("max_link_width")).filter(|w| *w > 0.0) {
+                max_width = Some(max_width.map_or(w, |now| now.max(w)));
+            }
+            if let Some(g) = read_text(path.join("current_link_speed")).and_then(|s| pcie_gen(&s)) {
+                gen = Some(gen.map_or(g, |now| now.min(g)));
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+        (gen.map(f64::from), width, max_width)
     }
 
     fn hwmon_channel(
@@ -361,6 +406,7 @@ impl GpuSampler {
         prefix: &str,
         suffix: &str,
         labels: &[&str],
+        exact: bool,
     ) -> Option<f64> {
         let mut chosen: Option<String> = None;
         for entry in entries {
@@ -370,7 +416,7 @@ impl GpuSampler {
                     .unwrap_or_default()
                     .to_lowercase();
                 let preferred = labels.contains(&label.as_str());
-                if preferred || chosen.is_none() {
+                if preferred || (chosen.is_none() && !exact) {
                     chosen = Some(entry.clone());
                     if preferred {
                         break;
@@ -403,10 +449,19 @@ impl GpuSampler {
         let util = read_f64(format!("{card}/gpu_busy_percent"));
         let mem_used = read_f64(format!("{card}/mem_info_vram_used"));
         let mem_total = read_f64(format!("{card}/mem_info_vram_total"));
-        let temp = Self::hwmon_value(device, "temp", &["edge", "junction"]).map(|t| t / 1000.0);
-        let power =
-            Self::hwmon_value(device, "power", &["ppt", "power"]).map(|p| p / 1_000_000.0);
-        let mhz = Self::hwmon_value(device, "freq", &["sclk"])
+        let hwmon = |prefix: &str, label: &str| Self::hwmon_value(device, prefix, &[label], true);
+        let temp =
+            Self::hwmon_value(device, "temp", &["edge", "junction"], false).map(|t| t / 1000.0);
+        let power = Self::hwmon_value(device, "power", &["ppt", "power"], false)
+            .map(|p| p / 1_000_000.0);
+        let power_cap = device
+            .hwmon
+            .as_ref()
+            .and_then(|h| read_f64(format!("{h}/power1_cap")))
+            .map(|p| p / 1_000_000.0);
+        let fan_rpm = device.hwmon.as_ref().and_then(|h| read_f64(format!("{h}/fan1_input")));
+        let fan_max = device.hwmon.as_ref().and_then(|h| read_f64(format!("{h}/fan1_max")));
+        let mhz = Self::hwmon_value(device, "freq", &["sclk"], false)
             .map(|f| f / 1_000_000.0)
             .or_else(|| read_f64(format!("{parent}/gt_cur_freq_mhz")))
             .or_else(|| read_f64(format!("{parent}/gt/gt0/rps_cur_freq_mhz")));
@@ -423,6 +478,14 @@ impl GpuSampler {
             "mhz": opt_f64(mhz),
             "maxMhz": opt_f64(max_mhz),
             "fan": Value::Null,
+            "tempJunction": opt_f64(hwmon("temp", "junction").map(|t| t / 1000.0)),
+            "tempMem": opt_f64(hwmon("temp", "mem").map(|t| t / 1000.0)),
+            "memBusy": opt_f64(read_f64(format!("{card}/mem_busy_percent"))),
+            "vcnBusy": opt_f64(read_f64(format!("{card}/vcn_busy_percent"))),
+            "memMhz": opt_f64(hwmon("freq", "mclk").map(|f| f / 1_000_000.0)),
+            "fanRpm": opt_f64(fan_rpm),
+            "fanMax": opt_f64(fan_max),
+            "powerCap": opt_f64(power_cap),
         })
     }
 
@@ -457,6 +520,13 @@ impl GpuSampler {
                     if let Some(total) = gpu["memTotal"].as_f64() {
                         self.devices[index].mem_total = Some(total);
                     }
+                    let mut gpu = gpu;
+                    if !self.devices[index].integrated {
+                        let (gen, width, max_width) = Self::pcie_link(&self.devices[index].card);
+                        gpu["pcieGen"] = opt_f64(gen);
+                        gpu["pcieWidth"] = opt_f64(width);
+                        gpu["pcieMaxWidth"] = opt_f64(max_width);
+                    }
                     gpus.push(gpu);
                 }
             }
@@ -480,7 +550,9 @@ impl GpuSampler {
 
 #[cfg(test)]
 mod tests {
-    use super::{amd_marketing_name, is_integrated, normalize_bus_id, power_state, Kind, State};
+    use super::{
+        amd_marketing_name, is_integrated, normalize_bus_id, pcie_gen, power_state, Kind, State,
+    };
 
     #[test]
     fn bus_ids_normalize_to_the_sysfs_form() {
@@ -506,6 +578,14 @@ mod tests {
         assert!(is_integrated(Kind::Intel, "0000:00:02.0", false));
         assert!(!is_integrated(Kind::Intel, "0000:03:00.0", false));
         assert!(!is_integrated(Kind::Nvidia, "0000:01:00.0", false));
+    }
+
+    #[test]
+    fn link_speeds_map_to_pcie_generations() {
+        assert_eq!(pcie_gen("16.0 GT/s PCIe"), Some(4));
+        assert_eq!(pcie_gen("2.5 GT/s PCIe"), Some(1));
+        assert_eq!(pcie_gen("8.0 GT/s PCIe"), Some(3));
+        assert_eq!(pcie_gen("Unknown"), None);
     }
 
     #[test]

@@ -424,7 +424,8 @@ class GpuSampler:
 
     QUERY = (
         "name,utilization.gpu,memory.used,memory.total,temperature.gpu,"
-        "power.draw,clocks.gr,clocks.max.gr,fan.speed,pci.bus_id"
+        "power.draw,clocks.gr,clocks.max.gr,fan.speed,pci.bus_id,"
+        "utilization.memory,utilization.encoder,utilization.decoder,clocks.mem,power.limit"
     )
     LIMIT = 8
     RESCAN = 5.0
@@ -600,8 +601,13 @@ class GpuSampler:
                 except ValueError:
                     return None
 
+            def extra(index: int) -> float | None:
+                # Older drivers may not know the newer fields: they stay null.
+                return num(parts[index]) if index < len(parts) else None
+
             mem_used = num(parts[2])
             mem_total = num(parts[3])
+            busy = [value for value in (extra(11), extra(12)) if value is not None]
             bus_id = self._normalize_bus_id(parts[9])
             snapshot = {
                 "id": bus_id,
@@ -615,12 +621,49 @@ class GpuSampler:
                 "mhz": num(parts[6]),
                 "maxMhz": num(parts[7]),
                 "fan": num(parts[8]),
+                "memBusy": extra(10),
+                "vcnBusy": max(busy) if busy else None,
+                "memMhz": extra(13),
+                "powerCap": extra(14),
             }
             with self.lock:
                 self.latest[bus_id] = snapshot
 
+    PCIE_GENS = {2.5: 1, 5.0: 2, 8.0: 3, 16.0: 4, 32.0: 5, 64.0: 6}
+
+    @classmethod
+    def _pcie_gen(cls, speed: str) -> int | None:
+        """PCIe generation from sysfs' `16.0 GT/s PCIe`."""
+        try:
+            return cls.PCIE_GENS.get(float(speed.split()[0]))
+        except (ValueError, IndexError):
+            return None
+
+    @classmethod
+    def _pcie_link(cls, card: str) -> tuple[int | None, float | None, float | None]:
+        """The narrowest and slowest link between the card and the CPU, which is
+        what an eGPU dock or a x4 slot limits, with the widest the card offers."""
+        gen = width = max_width = None
+        try:
+            path = os.path.realpath(card)
+        except OSError:
+            return None, None, None
+        while path.startswith("/sys/devices/") and path.count("/") > 3:
+            now = read_float(f"{path}/current_link_width")
+            if now:
+                width = now if width is None else min(width, now)
+            most = read_float(f"{path}/max_link_width")
+            if most:
+                max_width = most if max_width is None else max(max_width, most)
+            g = cls._pcie_gen(read_text(f"{path}/current_link_speed"))
+            if g:
+                gen = g if gen is None else min(gen, g)
+            path = os.path.dirname(path)
+        return gen, width, max_width
+
     @staticmethod
-    def _hwmon_value(device: dict, prefix: str, labels: tuple[str, ...]) -> float | None:
+    def _hwmon_value(device: dict, prefix: str, labels: tuple[str, ...], exact: bool = False) -> float | None:
+        """The channel with one of `labels`, else the first one unless `exact`."""
         hwmon = device["hwmon"]
         if not hwmon:
             return None
@@ -631,7 +674,7 @@ class GpuSampler:
             for entry in entries:
                 if entry.startswith(prefix) and entry.endswith(suffix):
                     label = read_text(f"{hwmon}/{entry[:-len(suffix)]}_label").lower()
-                    if label in labels or chosen is None:
+                    if label in labels or (chosen is None and not exact):
                         chosen = entry
                         if label in labels:
                             break
@@ -645,6 +688,11 @@ class GpuSampler:
             with self.lock:
                 latest = self.latest.get(device["id"])
                 return dict(latest) if latest else {"id": device["id"], "name": device["name"], "vendor": kind, "util": None}
+        hwmon = device["hwmon"]
+
+        def scaled(value: float | None, divisor: int) -> float | None:
+            return value / divisor if value is not None else None
+
         util = read_float(f"{card}/gpu_busy_percent")
         mem_used = read_float(f"{card}/mem_info_vram_used")
         mem_total = read_float(f"{card}/mem_info_vram_total")
@@ -674,6 +722,14 @@ class GpuSampler:
             "mhz": mhz,
             "maxMhz": max_mhz,
             "fan": None,
+            "tempJunction": scaled(self._hwmon_value(device, "temp", ("junction",), True), 1000),
+            "tempMem": scaled(self._hwmon_value(device, "temp", ("mem",), True), 1000),
+            "memBusy": read_float(f"{card}/mem_busy_percent"),
+            "vcnBusy": read_float(f"{card}/vcn_busy_percent"),
+            "memMhz": scaled(self._hwmon_value(device, "freq", ("mclk",), True), 1_000_000),
+            "fanRpm": read_float(f"{hwmon}/fan1_input") if hwmon else None,
+            "fanMax": read_float(f"{hwmon}/fan1_max") if hwmon else None,
+            "powerCap": scaled(read_float(f"{hwmon}/power1_cap") if hwmon else None, 1_000_000),
         }
 
     def sample(self) -> list[dict]:
@@ -694,6 +750,8 @@ class GpuSampler:
                 gpu = self._sample_device(device)
                 if gpu.get("memTotal") is not None:
                     device["memTotal"] = gpu["memTotal"]
+                if not device["integrated"]:
+                    gpu["pcieGen"], gpu["pcieWidth"], gpu["pcieMaxWidth"] = self._pcie_link(device["card"])
                 gpus.append(gpu)
             gpus[-1]["kind"] = "integrated" if device["integrated"] else "discrete"
             gpus[-1]["external"] = device["external"]
