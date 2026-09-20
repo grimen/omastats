@@ -210,7 +210,7 @@ Column {
 
         // GPU: which card the readout follows, when there are several.
         Dropdown {
-          visible: moduleRow.enabled && moduleRow.moduleId === "gpu" && root.gpuOptions.length > 2
+          visible: moduleRow.enabled && moduleRow.moduleId === "gpu" && root.gpuOptions.length > 3
           x: Style.space(12) + moduleSwitch.width + Style.space(12)
           width: parent.width - x
           label: "Source"

@@ -17,6 +17,8 @@ WidgetButton {
   // Disks: "all" or a block device name. Sensors: comma list of sensor ids.
   property string disksSource: "all"
   property string gpuSource: "auto"
+  // Overrides the module's short name, to tell several readouts of one module apart.
+  property string shortLabel: ""
   property string barSensors: "cpu"
   // "text" stacks the module's short name vertically, iStat style; "icon" uses a glyph.
   property string labelMode: "text"
@@ -218,7 +220,7 @@ WidgetButton {
 
     StackLabel {
       visible: root.module !== "sensors" && root.labelMode === "text"
-      text: root.def.short || root.def.label
+      text: root.shortLabel || root.def.short || root.def.label
       color: root.foreground
       fontFamily: root.fontFamily
       letterSize: Style.spaceReal(10)

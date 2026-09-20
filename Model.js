@@ -188,9 +188,36 @@ function pickGpu(snapshot, source) {
   return gpus.length > 0 ? gpus[0] : null
 }
 
+// Bar readouts for the configured modules. With the "all" source the GPU
+// module becomes one readout per GPU, written "gpu:<key>".
+function barReadouts(modules, gpuSource, gpuKeys) {
+  var out = []
+  for (var i = 0; i < modules.length; i++) {
+    if (modules[i] !== "gpu" || gpuSource !== "all" || gpuKeys.length === 0) { out.push(modules[i]); continue }
+    for (var g = 0; g < gpuKeys.length; g++) out.push("gpu:" + gpuKeys[g])
+  }
+  return out
+}
+
+function readoutModule(readout) {
+  return String(readout).split(":")[0]
+}
+
+function readoutGpu(readout) {
+  var text = String(readout)
+  var at = text.indexOf(":")
+  return at === -1 ? "" : text.slice(at + 1)
+}
+
+// "GP1", "GP2"… for per-GPU readouts, numbered like the GPU list; "" otherwise.
+function readoutLabel(readout, gpuKeys) {
+  var at = parseList(gpuKeys).indexOf(readoutGpu(readout))
+  return at === -1 ? "" : "GP" + (at + 1)
+}
+
 function gpuOptions(snapshot) {
   var gpus = gpuList(snapshot)
-  var out = [{ value: "auto", label: "Auto" }]
+  var out = [{ value: "auto", label: "Auto" }, { value: "all", label: "Every GPU" }]
   for (var i = 0; i < gpus.length; i++) out.push({ value: gpuKey(gpus[i]), label: shortGpuName(gpus[i].name).slice(0, 28) })
   return out
 }
