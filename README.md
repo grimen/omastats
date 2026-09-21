@@ -48,7 +48,9 @@ page links to it.
 With [LACT](https://github.com/ilya-zlobintsev/LACT) installed, the GPU page
 shows its profiles as buttons and switches between them with `lact cli profile
 set`. A profile is whatever you define it as in LACT: power limit, fan curve,
-performance level, clocks. LACT's daemon does the privileged work, so OmaStats
+performance level, clocks. LACT's "Default", meaning no profile is active, is
+shown as "Balanced", and the buttons are ordered like the CPU's power profiles.
+LACT's daemon does the privileged work, so OmaStats
 still needs no root; you need to be in LACT's admin group (`wheel` by default)
 and at least two profiles to have something to switch between; with one, the
 section says so. The buttons are read and refreshed only while the GPU page is

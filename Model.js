@@ -226,6 +226,23 @@ function nameLines(text, limit) {
   return out
 }
 
+// LACT profiles as button options, named and ordered like the CPU's power
+// profiles: LACT calls "no profile active" Default, which is what everything
+// else calls Balanced. `value` stays LACT's own name, which switching needs.
+function lactProfileOptions(names) {
+  var rank = function(name) {
+    var n = String(name).toLowerCase()
+    if (/power.?sav|quiet|silent|eco/.test(n)) return 0
+    if (n === "default" || n === "balanced") return 1
+    if (/perform/.test(n)) return 2
+    return 3
+  }
+  var out = []
+  for (var i = 0; i < names.length; i++) out.push({ value: names[i], label: names[i] === "Default" ? "Balanced" : names[i], at: i })
+  out.sort(function(a, b) { return rank(a.value) - rank(b.value) || a.at - b.at })
+  return out
+}
+
 function gpuOptions(snapshot) {
   var gpus = gpuList(snapshot)
   var out = [{ value: "auto", label: "Auto" }, { value: "all", label: "Every GPU" }]

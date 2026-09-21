@@ -127,7 +127,7 @@ Column {
 
     // The panel has its own key handling, so the group takes no Tab focus.
     ButtonGroup {
-      options: root.lactProfiles
+      options: Model.lactProfileOptions(root.lactProfiles)
       value: root.lactProfile
       focusable: false
       foreground: root.foreground
